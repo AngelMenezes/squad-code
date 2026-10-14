@@ -63,9 +63,19 @@ own git repository (`ensureProjectRepo`: `git init` before a run when `.git` is 
 `GIT_CEILING_DIRECTORIES` = PROJECTS_DIR (`gitCeiling`), so Claude Code (git status, `.claude/settings.json` from the repo root outside
 Windows) and the agents' git commands never reach the enclosing repository (this app's clone). The same settings file sets
 `permissions.blockReadsOutsideWorkingDirectories`, so the file tools refuse reads outside the folder (and `--add-dir`). Linked operations: the `repo` option (an id of `REPOS_FILE` = `SQUAD_REPOS` or `data/repos.json`, `loadRepos`, read on every
-use, never written; entries `{id, name, path | url, baseBranch}`) makes `ensureProjectClone` replace the `git init`: an empty folder
-(or one holding only the empty repository of an earlier `git init`) gets `git clone [--branch]`, a clone of the same origin is reused,
-anything else is refused; such runs get `Bash(git push:*)` in `disallowedTools`. `/api/health` sends `repos` (`publicRepos`: ids,
+use, never written; entries `{id, name, path | url, baseBranch, prepare}`) replaces the `git init`: `checkProjectClone` (before the
+answer, so refusals are a 400) accepts an empty folder or one holding only the empty repository of an earlier `git init` (to be cloned)
+and a clone of the same origin (reused), and refuses anything else. The clone, the feature's worktree and its prepare command run
+after the answer as the run's preparing phase (`prepareRun`, `run.phase` 'preparing' → 'running', `launchRun` spawns claude after it,
+`endRun` ends a run once from either phase): `bridge`/`prepare` events per step (clone, fetch, worktree, prepare) and `prepare-log`
+with the command output; the run counts as active from the start, cancel kills the current git/prepare process (`run.prepChild`,
+`gitRun`'s `track`), and a failed step ends the run as an error without starting claude; such runs get `Bash(git push:*)` in `disallowedTools`. With `feature` (a slug; `featureBase` = the F00's)
+the step runs in that feature's worktree `<clone>/.wt/<feature>` on branch `squad/<feature>` (`ensureWorktree`: reused when present,
+else the existing branch or a new one from the fetched `origin/<baseBranch>`, or from `squad/<featureBase>` while
+`docs/squad/mapa.md` is not on the base; `.wt/` goes to the clone's `info/exclude`), whose new worktrees run the entry's `prepare`
+command once (`prepareWorktree`, marker in `.git/squad-prepared-<feature>`, 15 min); the clone's own CLAUDE.md files join
+`claudeMdExcludes`, and a `bridge`/`worktree` event reports branch, notes and prepare. `DELETE /api/worktrees/:folder/:feature`
+(`removeWorktree`, 409 with uncommitted work) removes it and keeps the branch. `/api/health` sends `repos` (`publicRepos`: ids,
 names, branches, errors; never the path or URL). An explicit `cwd` stays as a fallback
 (tests, direct API use); a run with neither `project` nor `cwd` is refused (never `process.cwd()`, the app folder). The step prompt
 (`buildStepPrompt`) and `CALLED_AGENT_SYSTEM` tell agents to keep every file inside the folder. The settings.json project/local scopes
@@ -241,11 +251,14 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
 - Existing repository: `project.repoId` (persisted; chosen in the briefing's REPOSITÓRIO EXISTENTE, `repoFieldHTML`, from
   `ui.bridge.repos`; fixed once a feature has an output, `repoLocked`) goes to the bridge as `repo` in `runOptionsFor`. Its F00 is
   **Reconhecimento do projeto** (`RECON_FEATURE`, `setupDef`; `ensureSetup` swaps an untouched F00 both ways; `isRecon`,
-  `RECON_BRIEF`): the agents map the code into `docs/squad/` (with `.reconhecimento`, the base commit) on branch
-  `squad/reconhecimento`, and a ```json `{"docs":{...}}` block at the end of a step fills the project fields still empty
+  `RECON_BRIEF`): the agents map the code into `docs/squad/` (with `.reconhecimento`, the base commit), and a ```json `{"docs":{...}}` block at the end of a step fills the project fields still empty
   (`applyReconDocs`, ADRs only when there are none). `runGate(p, f)`: while that F00 is pending and the documentation is incomplete
   (`reconOnly`), runs take F00 alone and need only name, briefing and squad (`reconGaps`); `startRun`, `openSpawn`/`spawnAgent` and the
   commander chat follow it. Later steps of a linked operation are told to read `docs/squad` before exploring (`buildStepPrompt`).
+  Every step of a linked operation (`executeLiveStep`, spawn included) sends `feature: featureSlug(f)` (key + id tail, stable across
+  renames) and `featureBase` (the F00's), so it runs in that feature's worktree; the room and the console show the `worktree` event
+  and the preparing phase (`prepare` steps as the typing line, `PREP_TYPING`, and a note for the prepare command; `prepare-log` in the console),
+  and `approveFeature` asks the bridge to remove the worktree (the branch stays for the PR).
 - **Exportar** (operation header) → `exportProject`/`projectExportFiles`: a store-only `.zip` (`zipFiles`) with
   `CLAUDE.md`, `docs/{project,architecture,standards,features/<NNN-slug>}` and `.claude/{agents,commands,settings.json}`.
   `docs/standards` is compiled from the squad's DIRETRIZES (`STANDARD_FILES`); simulated-only progress exports as

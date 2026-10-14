@@ -366,6 +366,8 @@ const RECON_FEATURE={title:'Reconhecimento do projeto',scope:'setup',priority:'P
  tasks:'Mapear pastas, módulos e pontos de entrada\nDescrever arquitetura, integrações e decisões existentes\nRegistrar as convenções reais do código\nVerificar e documentar os comandos de build e teste\nGravar o commit de referência em docs/squad/.reconhecimento'};
 function setupDef(p){return p?.repoId?RECON_FEATURE:SETUP_FEATURE;}
 function isRecon(f,p=state.projects.find(x=>x.features.includes(f))){return !!(f?.setup&&p?.repoId);}
+// Worktree and branch (squad/<slug>) of a feature in a linked operation: key plus the end of the id, so a rename keeps it.
+function featureSlug(f){return`${String(f.key||'f').toLowerCase().replace(/[^a-z0-9]/g,'')||'f'}-${String(f.id).toLowerCase().replace(/[^a-z0-9]/g,'').slice(-6)}`;}
 function setupOf(p=project()){return p?.features?.find(f=>f.setup)||null;}
 function ensureSetup(p){
  const first=p?.sprints?.[0];if(!first||!Array.isArray(p.features))return null;
@@ -2080,10 +2082,10 @@ function buildStepPrompt(f,a,p){
   f.context?`## Contexto de handoff registrado\n${clip(f.context,6000)}`:'',
   previous?`## Entregas anteriores nesta rota\n${previous}`:'',
   brief?`## Instrução do comandante para você\n${brief}`:'',
-  isRecon(f,p)?`## Reconhecimento do repositório existente\nA pasta desta operação é um clone do repositório existente do projeto. Nesta feature você só documenta: não altere código de produção e não faça git push (os envios ficam com a pessoa).\n- Antes do primeiro commit, guarde o commit da branch base (git rev-parse HEAD) e grave-o com a data em docs/squad/.reconhecimento.\n- Trabalhe na branch squad/reconhecimento (crie-a a partir da branch base se ela não existir) e faça commit só de docs/squad.\n- Se docs/squad já existir, leia-o primeiro e atualize só o que mudou desde o commit de docs/squad/.reconhecimento (git diff <commit>..HEAD), sem varrer o repositório de novo.\n- Para mapear, leia a estrutura de pastas, os manifestos (package.json, pom.xml, go.mod...), o README, a configuração e os pontos de entrada. Não leia o código arquivo por arquivo.\nSe a sua etapa conhece o produto ou a arquitetura, termine a resposta com um bloco \`\`\`json {"docs":{"vision":"","scopeIn":"","scopeOut":"","glossary":"","architecture":"","adrs":[{"title":"","content":""}]}} com o que o código e a documentação mostram: listas com um item por linha, ADRs para as decisões já tomadas (stack, banco, integrações). Deixe vazio o que não souber: o app preenche só os campos do projeto que ainda estão vazios.`
-   :p.repoId?`## Repositório existente\nEste projeto já existia antes da squad. Leia docs/squad/mapa.md e os demais arquivos de docs/squad antes de explorar o código, e leia só os arquivos necessários para a sua tarefa. Não faça git push. Se a sua entrega muda a estrutura (módulo, integração ou comando novo), registre isso no relatório para a atualização do mapa.`:'',
+  isRecon(f,p)?`## Reconhecimento do repositório existente\nA pasta desta operação é um clone do repositório existente do projeto. Nesta feature você só documenta: não altere código de produção e não faça git push (os envios ficam com a pessoa).\n- Antes do primeiro commit, guarde o commit da branch base (git rev-parse HEAD) e grave-o com a data em docs/squad/.reconhecimento.\n- Faça commit só de docs/squad, na branch desta feature.\n- Se docs/squad já existir, leia-o primeiro e atualize só o que mudou desde o commit de docs/squad/.reconhecimento (git diff <commit>..HEAD), sem varrer o repositório de novo.\n- Para mapear, leia a estrutura de pastas, os manifestos (package.json, pom.xml, go.mod...), o README, a configuração e os pontos de entrada. Não leia o código arquivo por arquivo.\nSe a sua etapa conhece o produto ou a arquitetura, termine a resposta com um bloco \`\`\`json {"docs":{"vision":"","scopeIn":"","scopeOut":"","glossary":"","architecture":"","adrs":[{"title":"","content":""}]}} com o que o código e a documentação mostram: listas com um item por linha, ADRs para as decisões já tomadas (stack, banco, integrações). Deixe vazio o que não souber: o app preenche só os campos do projeto que ainda estão vazios.`
+   :p.repoId?`## Repositório existente\nEste projeto já existia antes da squad. Leia docs/squad/mapa.md e os demais arquivos de docs/squad antes de explorar o código, e leia só os arquivos necessários para a sua tarefa. Faça commit das suas mudanças na branch desta feature. Não faça git push. Se a sua entrega muda a estrutura (módulo, integração ou comando novo), registre isso no relatório para a atualização do mapa.`:'',
   mates.length?`## Colegas que você pode chamar\nUse a ferramenta Agent com subagent_type igual ao identificador para pedir a um colega uma decisão, uma revisão ou uma parte que é da especialidade dele. Explique no pedido o que precisa e o contexto. O colega trabalha na mesma pasta, com as ferramentas dele, e devolve a resposta para você. Não delegue a sua etapa inteira.\n${mates.join('\n')}`:'',
-  `## Entrega esperada\nSiga rigorosamente o guia de convenções e boas práticas anexado às suas instruções. Trabalhe na pasta desta operação, que é o diretório de trabalho atual (projects/${p.folder}): todo código, teste e documento da implementação fica dentro dela, e nada fora dela deve ser criado ou alterado. Execute a sua parte respeitando o seu papel. Não declare testes ou verificações que não executou.\n${next?`Ao terminar, responda com um resumo de handoff para ${next.name} (${roleLabel(next)}): o que foi feito, arquivos alterados, decisões, pendências e o próximo passo.`:'Você é a última etapa. Responda com um relatório para a revisão humana: o que foi entregue, arquivos alterados, evidências de verificação executadas, lacunas e riscos.'}\nResponda em português do Brasil.`
+  `## Entrega esperada\nSiga rigorosamente o guia de convenções e boas práticas anexado às suas instruções. Trabalhe na pasta desta operação, que é o diretório de trabalho atual (${p.repoId?`projects/${p.folder}/.wt/${featureSlug(f)}, um worktree do repositório na branch squad/${featureSlug(f)}, só desta feature: não troque de branch`:`projects/${p.folder}`}): todo código, teste e documento da implementação fica dentro dela, e nada fora dela deve ser criado ou alterado. Execute a sua parte respeitando o seu papel. Não declare testes ou verificações que não executou.\n${next?`Ao terminar, responda com um resumo de handoff para ${next.name} (${roleLabel(next)}): o que foi feito, arquivos alterados, decisões, pendências e o próximo passo.`:'Você é a última etapa. Responda com um relatório para a revisão humana: o que foi entregue, arquivos alterados, evidências de verificação executadas, lacunas e riscos.'}\nResponda em português do Brasil.`
  ].filter(Boolean).join('\n\n');
 }
 function newConsole(meta){const c={id:meta.runId||id('console'),lines:[],status:'running',startedAt:nowISO(),...meta};ui.consoles.push(c);if(ui.consoles.length>12)ui.consoles.shift();ui.consoleId=c.id;return c;}
@@ -2091,6 +2093,9 @@ function consoleLine(c,kind,text){c.lines.push({kind,text:String(text).slice(0,6
 function describeTool(block){const input=block.input||{};const hint=input.command||input.file_path||input.path||input.pattern||input.url||input.query||input.description||Object.values(input).find(v=>typeof v==='string')||'';return`${block.name}${hint?'  '+String(hint).replace(/\s+/g,' ').slice(0,160):''}`;}
 function handleRunEvent(c,evt){
  if(evt.type==='bridge'&&evt.subtype==='spawned')consoleLine(c,'cmd',`$ claude ${evt.args.join(' ')}\n  cwd: ${evt.cwd} / pid ${evt.pid}`);
+ else if(evt.type==='bridge'&&evt.subtype==='prepare')consoleLine(c,'sys',evt.text);
+ else if(evt.type==='bridge'&&evt.subtype==='prepare-log')consoleLine(c,'dim',evt.text.trimEnd());
+ else if(evt.type==='bridge'&&evt.subtype==='worktree'){consoleLine(c,'sys',`worktree ${evt.created?'criado':'reaproveitado'}: branch ${evt.branch}`);for(const n of [...(evt.notes||[]),evt.prepare].filter(Boolean))consoleLine(c,'dim',n);}
  else if(evt.type==='bridge')consoleLine(c,'warn',evt.subtype==='timeout'?`Tempo limite de ${evt.timeoutSec}s atingido. Encerrando processo.`:'Cancelamento solicitado.');
  else if(evt.type==='system'&&evt.subtype==='init'){c.sessionId=evt.session_id;consoleLine(c,'sys',`sessão ${evt.session_id} / modelo ${evt.model||'?'} / permissão ${evt.permissionMode||'?'} / ${evt.tools?.length??0} ferramentas`);}
  else if(evt.type==='assistant')for(const b of evt.message?.content||[]){if(b.type==='text'&&b.text.trim())consoleLine(c,'text',b.text);else if(b.type==='tool_use')consoleLine(c,'tool',describeTool(b));}
@@ -2138,6 +2143,7 @@ async function replayRun(runId){
 async function executeLiveStep(f,a,p,owner){
  f.runStart??=f.outputs.length;
  const prompt=buildStepPrompt(f,a,p),{options,keys}=stepRunOptions(a,p),ctx=roomCtx(a,f,keys);
+ if(p.repoId){const s=setupOf(p);options.feature=featureSlug(f);if(s&&s!==f)options.featureBase=featureSlug(s);}
  let started;
  try{started=await bridgeFetch('/api/runs',{method:'POST',body:JSON.stringify({prompt,systemPrompt:agentSystemPrompt(a),label:`${a.name} / ${f.key}`,meta:runMeta(p,a,f,owner?.kind==='spawn'?'spawn':'step'),options})});}
  catch(error){return{error:error.message};}
@@ -2360,7 +2366,12 @@ function toolActivity(b){const i=b.input||{},hint=String(i.file_path||i.notebook
 function toolResultText(c){return typeof c==='string'?c:Array.isArray(c)?c.map(x=>typeof x==='string'?x:x?.text||'').join('\n').trim():'';}
 // A foreground subagent's result is framed by Claude Code ("[Subagent hand-back] ... The report follows:", every report line indented, then agentId/usage): keep the report.
 function subagentReport(t){t=String(t||'');if(!/^\[Subagent hand-back\]/.test(t))return t.trim();const out=[];for(const l of t.slice(t.indexOf('\n')+1).split('\n')){if(l&&!l.startsWith('  '))break;out.push(l.slice(2));}return out.join('\n').trim();}
+// Linked operations prepare before the agent starts (clone, fetch, worktree, prepare command): the typing line says which step.
+const PREP_TYPING={clone:'está clonando o repositório',fetch:'está atualizando a branch base',worktree:'está criando o worktree da feature',prepare:'está preparando o worktree'};
 function roomEvent(ctx,evt){
+ if(evt.type==='bridge'&&evt.subtype==='prepare'){roomTyping(ctx.agentId,PREP_TYPING[evt.step]||'está preparando');if(evt.step==='prepare')roomPush({kind:'system',text:`${ctx.key}: ${evt.text}`});return;}
+ if(evt.type==='bridge'&&evt.subtype==='spawned'){roomTyping(ctx.agentId,'está trabalhando');return;}
+ if(evt.type==='bridge'&&evt.subtype==='worktree'){const extra=[...(evt.notes||[]),evt.prepare].filter(Boolean).map(t=>t.split('\n')[0]);if(evt.created||extra.length)roomPush({kind:'system',text:`${ctx.key}: ${evt.created?'worktree criado':'worktree reaproveitado'} na branch ${evt.branch}.${extra.length?' '+extra.join(' '):''}`});return;}
  if(evt.type==='assistant'){
   const parent=evt.parent_tool_use_id||null,who=parent?ctx.calls.get(parent):ctx.agentId,thread=parent?ctx.cards.get(parent)?.id:undefined;if(!who)return;
   for(const b of evt.message?.content||[]){
@@ -2564,6 +2575,7 @@ function reviewHTML(f){
 function approveFeature(featureId,approve){
  const f=featureById(featureId);if(!f||f.status!=='review')return toast('Somente features em revisão podem ser aprovadas.','error');
  f.status=approve?'done':'ready';f.step=0;f.currentAgentId=null;
+ const p=project();if(approve&&p.repoId&&BRIDGE_TOKEN)bridgeFetch(`/api/worktrees/${p.folder}/${featureSlug(f)}`,{method:'DELETE'}).then(r=>{if(r.removed)toast(`Worktree de ${f.key} removido. A branch ${r.branch} continua no clone para o PR.`);}).catch(error=>toast(error.message,'error'));
  log(`${f.key}: ${approve?'entrega aprovada pelo operador':'ajustes solicitados pelo operador'}.`,'review');refreshBlocked();save();closeModal();render();toast(approve?'Entrega aprovada na demonstracao. Dependências liberadas.':'Feature devolvida para a fila de execução.');
 }
 function openFeature(featureId){const f=featureById(featureId);if(!f)return;if(['done','review','running'].includes(f.status))openOpsFeature(featureId);else openFeatureEditor(featureId);}

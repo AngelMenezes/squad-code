@@ -130,10 +130,10 @@ const longPath = p => { try { return fs.realpathSync.native(p); } catch { return
 
 /* Claude Code loads CLAUDE.md from every folder above the cwd: project runs skip this app's own instructions.
  * Absolute patterns plus a `**`-anchored variant (last two segments of ROOT), in case the drive letter does not match. */
+const MEMORY_FILES = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude/CLAUDE.md', '.claude/rules/**'];
 const APP_MEMORY_EXCLUDES = (() => {
   const root = longPath(ROOT).replace(/\\/g, '/'), tail = root.split('/').filter(Boolean).slice(-2).join('/');
-  const files = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude/CLAUDE.md', '.claude/rules/**'];
-  return [...files.map(f => `${root}/${f}`), ...files.map(f => `**/${tail}/${f}`)];
+  return [...MEMORY_FILES.map(f => `${root}/${f}`), ...MEMORY_FILES.map(f => `**/${tail}/${f}`)];
 })();
 
 /* Each project folder is its own git repository (git init before its first run, when git is installed). Otherwise Claude Code, which
@@ -155,7 +155,7 @@ function ensureProjectRepo(dir) {
 /* Existing repositories an operation can link to (project.repoId). The person lists them in REPOS_FILE, read on every use (it can be
  * edited while the bridge runs, and the bridge never writes it): {"repos":[{"id":"billing","name":"Faturamento","path":"C:/code/billing"
  * (or "url":"https://..."),"baseBranch":"main"}]}. The page only names an id, never a path. A linked operation's folder becomes a
- * clone of that repository (ensureProjectClone), so the agents never touch the person's own working copy. */
+ * clone of that repository (checkProjectClone, cloneProject), so the agents never touch the person's own working copy. */
 const REPOS_FILE = path.resolve(process.env.SQUAD_REPOS || path.join(DATA_DIR, 'repos.json'));
 const BRANCH_RE = /^(?![-/.])(?!.*\.\.)[A-Za-z0-9._/-]{1,100}$/;
 const REPO_URL_RE = /^(https:\/\/|ssh:\/\/|git@)[^\s"']{3,500}$/;
@@ -177,40 +177,111 @@ function loadRepos() {
     else if (!dir) error = 'Informe "path" ou "url".';
     else if (!fs.existsSync(path.join(dir, '.git')) && !fs.existsSync(path.join(dir, 'HEAD'))) error = 'O caminho não é um repositório git.';
     if (baseBranch && !BRANCH_RE.test(baseBranch)) error = 'baseBranch inválida.';
-    repos.push({ id, name: String(r.name || id).slice(0, 80), source: url || (fs.existsSync(dir) ? longPath(dir) : dir), baseBranch, error });
+    const prepare = typeof r.prepare === 'string' ? r.prepare.trim().slice(0, 500) : '';
+    repos.push({ id, name: String(r.name || id).slice(0, 80), source: url || (fs.existsSync(dir) ? longPath(dir) : dir), baseBranch, prepare, error });
   }
   return { file: REPOS_FILE, repos, error: null };
 }
 // What the page sees: no path or URL (a URL may carry credentials).
 const publicRepos = () => { const r = loadRepos(); return { file: r.file, error: r.error, repos: r.repos.map(({ id, name, baseBranch, error }) => ({ id, name, baseBranch, error })) }; };
 
-const gitRun = (args, cwd, timeout = 15000) => new Promise((resolve, reject) => {
-  execFile('git', args, { cwd, windowsHide: true, timeout, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling(), GIT_TERMINAL_PROMPT: '0' } },
+// track(child) receives each git process, so a cancelled run can kill the one in progress.
+const gitRun = (args, cwd, timeout = 15000, track) => new Promise((resolve, reject) => {
+  const child = execFile('git', args, { cwd, windowsHide: true, timeout, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling(), GIT_TERMINAL_PROMPT: '0' } },
     (err, out, errOut) => err ? reject(Object.assign(new Error(String(errOut || err.message).trim().slice(0, 500)), { code: err.code })) : resolve(String(out).trim()));
+  track?.(child);
 });
 const sameSource = (a, b) => {
   const norm = s => REPO_URL_RE.test(s) ? s.replace(/\/+$/, '').replace(/\.git$/, '') : path.resolve(s).replace(/[\\/]+$/, '');
   return IS_WIN ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
 };
-/** A linked operation's folder: cloned from the registered repository on its first run, then checked to still be that clone. */
-async function ensureProjectClone(dir, repo) {
+/** What a linked operation's folder needs, checked before the run is accepted: 'ready' (already a clone of that repository), 'clone'
+ * (empty) or 'reinit' (only the empty repository of an earlier git init, from a chat before the link). Anything else is refused. */
+async function checkProjectClone(dir, repo) {
   if (repo.error) throw new Error(`Repositório ${repo.id}: ${repo.error}`);
   const entries = fs.readdirSync(dir), unused = 'o vínculo com um repositório existente vale só para operações que ainda não trabalharam na pasta';
-  if (entries.includes('.git')) {
-    let origin = '';
-    try { origin = await gitRun(['remote', 'get-url', 'origin'], dir); } catch {}
-    if (origin) {
-      if (sameSource(origin, repo.source)) return;
-      throw new Error(`A pasta da operação já é clone de outro repositório, não de ${repo.id}.`);
-    }
-    // Only the empty repository of an earlier git init (a chat before the link) gives way to the clone.
-    let head = true;
-    try { await gitRun(['rev-parse', '--verify', '-q', 'HEAD'], dir); } catch { head = false; }
-    if (head || entries.length > 1) throw new Error(`A pasta da operação já tem um repositório próprio: ${unused}.`);
-    fs.rmSync(path.join(dir, '.git'), { recursive: true, force: true });
-  } else if (entries.length) throw new Error(`A pasta da operação já tem arquivos: ${unused}.`);
-  try { await gitRun(['clone', '-q', ...(repo.baseBranch ? ['--branch', repo.baseBranch] : []), '--', repo.source, dir], PROJECTS_DIR, 600000); }
+  if (!entries.includes('.git')) {
+    if (entries.length) throw new Error(`A pasta da operação já tem arquivos: ${unused}.`);
+    return 'clone';
+  }
+  let origin = '';
+  try { origin = await gitRun(['remote', 'get-url', 'origin'], dir); } catch {}
+  if (origin) {
+    if (sameSource(origin, repo.source)) return 'ready';
+    throw new Error(`A pasta da operação já é clone de outro repositório, não de ${repo.id}.`);
+  }
+  let head = true;
+  try { await gitRun(['rev-parse', '--verify', '-q', 'HEAD'], dir); } catch { head = false; }
+  if (head || entries.length > 1) throw new Error(`A pasta da operação já tem um repositório próprio: ${unused}.`);
+  return 'reinit';
+}
+async function cloneProject(dir, repo, state, track) {
+  if (state === 'reinit') fs.rmSync(path.join(dir, '.git'), { recursive: true, force: true });
+  try { await gitRun(['clone', '-q', ...(repo.baseBranch ? ['--branch', repo.baseBranch] : []), '--', repo.source, dir], PROJECTS_DIR, 600000, track); }
   catch (e) { throw new Error(e.code === 'ENOENT' ? 'Git não encontrado: instale o Git para vincular um repositório existente.' : `git clone de ${repo.id} falhou: ${e.message}`); }
+}
+
+/* Linked operations: each feature works in its own git worktree of the operation's clone, <clone>/.wt/<feature> on branch
+ * squad/<feature>, created on its first run from the freshly fetched base branch and reused until its approval removes it (the branch
+ * stays, for the PR). Until docs/squad is on the base branch, features start from the reconnaissance branch (featureBase) so they get
+ * the map. A new worktree runs the repository's "prepare" command (npm ci...) until it succeeds once. All of it is the run's
+ * preparing phase (prepareRun): say(step, text) reports each step. */
+const WT_DIR = '.wt';
+const preparedMark = (root, slug) => path.join(root, '.git', `squad-prepared-${slug}`);
+const gitOk = (args, cwd) => gitRun(args, cwd).then(() => true, () => false);
+async function ensureWorktree(root, repo, slug, baseSlug, track, say) {
+  const dir = path.join(root, WT_DIR, slug), branch = `squad/${slug}`, notes = [];
+  if (fs.existsSync(path.join(dir, '.git'))) return { dir, branch, notes, created: false };
+  // .wt stays out of the clone's own git status.
+  try {
+    const exclude = path.join(root, '.git', 'info', 'exclude'), cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
+    if (!cur.split(/\r?\n/).includes(`/${WT_DIR}/`)) { fs.mkdirSync(path.dirname(exclude), { recursive: true }); fs.appendFileSync(exclude, `${cur && !cur.endsWith('\n') ? '\n' : ''}/${WT_DIR}/\n`); }
+  } catch {}
+  await gitRun(['worktree', 'prune'], root).catch(() => {});
+  try {
+    if (await gitOk(['rev-parse', '--verify', '-q', `refs/heads/${branch}`], root)) await gitRun(['worktree', 'add', '-q', dir, branch], root, 120000, track);
+    else {
+      say('fetch', 'Atualizando a branch base (git fetch).');
+      try { await gitRun(['fetch', '-q', 'origin'], root, 300000, track); } catch (e) { notes.push(`git fetch falhou, a feature parte da cópia local: ${e.message}`); }
+      let start = repo.baseBranch ? `origin/${repo.baseBranch}` : 'origin/HEAD';
+      if (!await gitOk(['rev-parse', '--verify', '-q', `${start}^{commit}`], root)) start = repo.baseBranch || 'HEAD';
+      if (baseSlug && !await gitOk(['cat-file', '-e', `${start}:docs/squad/mapa.md`], root) && await gitOk(['rev-parse', '--verify', '-q', `refs/heads/squad/${baseSlug}`], root)) {
+        start = `squad/${baseSlug}`;
+        notes.push(`O mapa ainda não está na branch base: a feature parte de ${start}.`);
+      }
+      say('worktree', `Criando o worktree na branch ${branch}.`);
+      await gitRun(['worktree', 'add', '-q', '-b', branch, dir, start], root, 120000, track);
+    }
+  } catch (e) { throw new Error(e.code === 'ENOENT' ? 'Git não encontrado.' : `Não foi possível criar o worktree ${slug}: ${e.message}`); }
+  return { dir, branch, notes, created: true };
+}
+/** Runs the repository's prepare command in a new worktree, its output going to onOutput as it comes. null = nothing to prepare. */
+function prepareWorktree(root, dir, repo, slug, track, onOutput) {
+  if (!repo.prepare || fs.existsSync(preparedMark(root, slug))) return Promise.resolve(null);
+  return new Promise(resolve => {
+    let out = '', done = false;
+    const finish = (ok, text) => { if (!done) { done = true; clearTimeout(timer); resolve({ ok, text }); } };
+    const child = spawn(repo.prepare, { cwd: dir, shell: true, windowsHide: true, detached: !IS_WIN, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling() } });
+    track?.(child);
+    const keep = d => { out = (out + d).slice(-4000); onOutput?.(d.slice(0, 4000)); };
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data', keep); child.stderr.on('data', keep);
+    const timer = setTimeout(() => { killTree(child); finish(false, `Preparo "${repo.prepare}" passou de 15 minutos e foi interrompido.`); }, 900000);
+    child.on('error', e => finish(false, `Preparo "${repo.prepare}" falhou: ${e.message}`));
+    child.on('close', code => {
+      if (code === 0) { try { fs.writeFileSync(preparedMark(root, slug), new Date().toISOString()); } catch {} finish(true, `Preparo concluído: ${repo.prepare}`); }
+      else finish(false, `Preparo "${repo.prepare}" saiu com código ${code}:\n${out.trim().slice(-1500)}`);
+    });
+  });
+}
+/** Removes an approved feature's worktree (never with uncommitted work: git refuses it). The branch stays. */
+async function removeWorktree(root, slug) {
+  const dir = path.join(root, WT_DIR, slug);
+  if (!fs.existsSync(dir)) return { removed: false, branch: `squad/${slug}` };
+  try { await gitRun(['worktree', 'remove', dir], root, 60000); }
+  catch (e) { throw Object.assign(new Error(`O worktree ${slug} não foi removido: ${e.message}`), { status: 409 }); }
+  try { fs.rmSync(preparedMark(root, slug), { force: true }); } catch {}
+  return { removed: true, branch: `squad/${slug}` };
 }
 
 /** Folder of a project under PROJECTS_DIR; the name is a plain slug, so it cannot leave the root. */
@@ -326,7 +397,13 @@ function validateRunOptions(o = {}) {
     if (!repo) throw new Error(`Repositório não cadastrado: ${o.repo.trim().slice(0, 80)}. Cadastre-o em ${REPOS_FILE}.`);
     out.repo = repo;
     out.disallowedTools = [...new Set([...out.disallowedTools, 'Bash(git push:*)'])];
-  }
+    // A feature step works in that feature's worktree (ensureWorktree); plans and chats stay in the clone.
+    for (const k of ['feature', 'featureBase']) {
+      if (o[k] === undefined || o[k] === null || o[k] === '') continue;
+      if (typeof o[k] !== 'string' || !FOLDER_RE.test(o[k])) throw new Error(`Identificador de feature inválido: ${String(o[k]).slice(0, 80)}`);
+      out[k] = o[k];
+    }
+  } else if (o.feature) throw new Error('O worktree por feature vale só para operações com repositório vinculado.');
   out.addDirs = (Array.isArray(o.addDirs) ? o.addDirs : []).map(String).map(s => s.trim()).filter(Boolean).slice(0, 10).map(d => path.resolve(d));
   out.addDirs = out.addDirs.map(d => fs.existsSync(d) ? longPath(d) : d);
   for (const d of out.addDirs) if (!fs.existsSync(d)) throw new Error(`Diretório adicional inexistente: ${d}`);
@@ -373,8 +450,13 @@ async function startRun(body) {
   if (activeCount() >= maxConcurrent) throw Object.assign(new Error(`Limite de ${maxConcurrent} execuções simultâneas atingido.`), { status: 429 });
   const resolved = await resolveBin(opts.claudePath);
   if (!resolved) throw new Error(`Claude Code não encontrado ("${opts.claudePath}"). Ajuste o caminho nas configurações.`);
-  if (opts.repo) await ensureProjectClone(opts.cwd, opts.repo);
-  else if (opts.projectRun) await ensureProjectRepo(opts.cwd);
+  // Linked operation: whether its folder can be used is checked now (a refusal answers the request); the clone, the feature's
+  // worktree and its prepare command run after the answer, as the run's preparing phase (prepareRun).
+  let prep = null;
+  if (opts.repo) {
+    prep = { root: opts.cwd, clone: await checkProjectClone(opts.cwd, opts.repo), feature: opts.feature || null, base: opts.featureBase && opts.featureBase !== opts.feature ? opts.featureBase : null };
+    if (prep.feature) opts.cwd = path.join(prep.root, WT_DIR, prep.feature);
+  } else if (opts.projectRun) await ensureProjectRepo(opts.cwd);
 
   const id = crypto.randomUUID();
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-prompts', 'none'];
@@ -390,7 +472,9 @@ async function startRun(body) {
     settingsFile = path.join(TMP_DIR, `${id}.settings.json`);
     // The file tools also refuse reads outside the project folder (and --add-dir), so agents never take this app or the
     // person's other folders for the project.
-    await fsp.writeFile(settingsFile, JSON.stringify({ claudeMdExcludes: APP_MEMORY_EXCLUDES, permissions: { blockReadsOutsideWorkingDirectories: true } }), 'utf8');
+    // In a worktree, the clone above it would add its own (base branch) CLAUDE.md files to the worktree's.
+    const excludes = prep?.feature ? [...APP_MEMORY_EXCLUDES, ...MEMORY_FILES.map(f => `${prep.root.replace(/\\/g, '/')}/${f}`)] : APP_MEMORY_EXCLUDES;
+    await fsp.writeFile(settingsFile, JSON.stringify({ claudeMdExcludes: excludes, permissions: { blockReadsOutsideWorkingDirectories: true } }), 'utf8');
     args.push('--settings', settingsFile);
   }
   if (opts.agents) {
@@ -409,16 +493,10 @@ async function startRun(body) {
   for (const d of opts.addDirs) args.push('--add-dir', d);
   if (opts.partial) args.push('--include-partial-messages');
 
-  const child = spawnBin(resolved, args, {
-    cwd: opts.cwd, windowsHide: true, detached: !IS_WIN,
-    // With squad colleagues, calls run in the foreground: the Agent tool result is the colleague's answer, not a launch notice.
-    // Project runs: git stops at PROJECTS_DIR (see ensureProjectRepo), even when the folder's own .git is missing.
-    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT || 'squad-code-bridge', ...(opts.agents ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } : {}), ...(opts.projectRun ? { GIT_CEILING_DIRECTORIES: gitCeiling() } : {}) },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  // A preparing run already counts as running (concurrency, cancel); its child is the current git or prepare process (prepChild).
   const run = {
-    id, status: 'running', startedAt: new Date().toISOString(), endedAt: null, label: String(body.label || '').slice(0, 200),
-    cwd: opts.cwd, args: args.map(a => a === sysFile ? '<system-prompt-file>' : a === settingsFile ? '<settings-file>' : a === agentsFile ? '<agents-file>' : a), child, events: [], clients: new Set(),
+    id, status: 'running', phase: prep ? 'preparing' : 'running', startedAt: new Date().toISOString(), endedAt: null, label: String(body.label || '').slice(0, 200),
+    cwd: opts.cwd, args: args.map(a => a === sysFile ? '<system-prompt-file>' : a === settingsFile ? '<settings-file>' : a === agentsFile ? '<agents-file>' : a), child: null, prepChild: null, events: [], clients: new Set(),
     result: null, sysFile, settingsFile, agentsFile, timer: null, cancelled: false,
     // History: who ran it and where (body.meta, whitelisted in db.js), saved events count and the batch waiting to be written.
     // Without a database yet (direct API use before the setup), the run still works but stays out of the history.
@@ -426,7 +504,49 @@ async function startRun(body) {
   };
   runs.set(id, run);
   if (run.persist) try { store.insertRun(run); } catch (e) { run.persist = false; console.warn(`Histórico da execução ${id} não gravado: ${e.message}`); }
-  pushEvent(run, { type: 'bridge', subtype: 'spawned', pid: child.pid, cwd: opts.cwd, args: run.args, at: run.startedAt });
+  if (!prep) launchRun(run, resolved, args, opts, prompt);
+  else prepareRun(run, opts, prep).then(ok => { if (ok && !run.cancelled) launchRun(run, resolved, args, opts, prompt); else endRun(run); });
+  return run;
+}
+
+/* The preparing phase of a linked operation's run: clone, worktree and prepare, each reported as a bridge/prepare event and the
+ * prepare output as bridge/prepare-log, so the page shows them live and can cancel them. A failed step ends the run as an error:
+ * the agent never starts in a folder that is not ready. */
+async function prepareRun(run, opts, prep) {
+  const say = (step, text) => pushEvent(run, { type: 'bridge', subtype: 'prepare', step, text });
+  const track = child => { run.prepChild = child; };
+  try {
+    if (prep.clone !== 'ready') { say('clone', `Clonando o repositório ${opts.repo.name}.`); await cloneProject(prep.root, opts.repo, prep.clone, track); }
+    if (run.cancelled || !prep.feature) return !run.cancelled;
+    const wt = await ensureWorktree(prep.root, opts.repo, prep.feature, prep.base, track, say);
+    if (run.cancelled) return false;
+    let prepared = null;
+    if (opts.repo.prepare && !fs.existsSync(preparedMark(prep.root, prep.feature))) {
+      say('prepare', `Preparando o worktree: ${opts.repo.prepare}`);
+      const r = await prepareWorktree(prep.root, wt.dir, opts.repo, prep.feature, track, text => pushEvent(run, { type: 'bridge', subtype: 'prepare-log', text }));
+      if (run.cancelled) return false;
+      if (!r.ok) throw new Error(r.text);
+      prepared = r.text;
+    }
+    pushEvent(run, { type: 'bridge', subtype: 'worktree', feature: prep.feature, branch: wt.branch, created: wt.created, notes: wt.notes, prepare: prepared });
+    return true;
+  } catch (e) {
+    if (!run.cancelled) endRun(run, { isError: true, error: e.message });
+    return false;
+  } finally { run.prepChild = null; }
+}
+
+function launchRun(run, resolved, args, opts, prompt) {
+  run.phase = 'running';
+  const child = spawnBin(resolved, args, {
+    cwd: opts.cwd, windowsHide: true, detached: !IS_WIN,
+    // With squad colleagues, calls run in the foreground: the Agent tool result is the colleague's answer, not a launch notice.
+    // Project runs: git stops at PROJECTS_DIR (see ensureProjectRepo), even when the folder's own .git is missing.
+    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT || 'squad-code-bridge', ...(opts.agents ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } : {}), ...(opts.projectRun ? { GIT_CEILING_DIRECTORIES: gitCeiling() } : {}) },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  run.child = child;
+  pushEvent(run, { type: 'bridge', subtype: 'spawned', pid: child.pid, cwd: opts.cwd, args: run.args, at: new Date().toISOString() });
 
   run.timer = setTimeout(() => { run.timedOut = true; pushEvent(run, { type: 'bridge', subtype: 'timeout', timeoutSec: opts.timeoutSec }); killTree(child); }, opts.timeoutSec * 1000);
 
@@ -448,36 +568,42 @@ async function startRun(body) {
   child.stderr.on('data', chunk => { stderrTail = (stderrTail + chunk).slice(-4000); pushEvent(run, { type: 'stderr', text: chunk.slice(0, 4000) }); });
   child.on('error', err => { stderrTail += err.message; });
   child.on('close', code => {
-    clearTimeout(run.timer);
     if (buffer.trim()) { try { const evt = JSON.parse(buffer); if (evt.type === 'result') run.result = evt; pushEvent(run, evt); } catch { pushEvent(run, { type: 'raw', text: buffer.slice(0, 4000) }); } }
     const r = run.result || {};
-    const isError = run.cancelled || run.timedOut || code !== 0 || !!r.is_error;
-    run.status = run.cancelled ? 'cancelled' : run.timedOut ? 'timeout' : isError ? 'error' : 'done';
-    run.endedAt = new Date().toISOString();
-    const exit = {
-      type: 'exit', status: run.status, code, isError,
-      result: typeof r.result === 'string' ? r.result : '',
-      costUsd: r.total_cost_usd ?? r.cost_usd ?? null, durationMs: r.duration_ms ?? null,
-      numTurns: r.num_turns ?? null, sessionId: r.session_id ?? null,
-      error: isError ? (run.cancelled ? 'Execução cancelada pelo operador.' : run.timedOut ? 'Tempo limite excedido.' : (r.is_error && r.result) || stderrTail.trim().slice(-1500) || `claude saiu com código ${code}`) : null,
-    };
-    pushEvent(run, exit);
-    if (run.persist) try { store.finishRun(run, exit); } catch (e) { console.warn(`Histórico da execução ${id} não finalizado: ${e.message}`); }
-    for (const res of run.clients) res.end();
-    run.clients.clear();
-    for (const file of [run.sysFile, run.settingsFile, run.agentsFile]) if (file) fsp.rm(file, { force: true }).catch(() => {});
-    run.child = null;
-    // Keep finished runs for 30 minutes so late subscribers can replay.
-    setTimeout(() => runs.delete(id), 30 * 60 * 1000).unref();
+    endRun(run, { code, isError: code !== 0 || !!r.is_error, error: (r.is_error && r.result) || stderrTail.trim().slice(-1500) || `claude saiu com código ${code}` });
   });
 
   child.stdin.on('error', () => {});
   child.stdin.end(prompt, 'utf8');
-  return run;
+}
+
+/** Ends a run once: exit event, history, subscribers and temp files. Also for runs that end while preparing (error or cancel). */
+function endRun(run, { code = null, isError = false, error = '' } = {}) {
+  if (run.status !== 'running') return;
+  clearTimeout(run.timer);
+  const r = run.result || {};
+  isError = run.cancelled || run.timedOut || isError;
+  run.status = run.cancelled ? 'cancelled' : run.timedOut ? 'timeout' : isError ? 'error' : 'done';
+  run.endedAt = new Date().toISOString();
+  const exit = {
+    type: 'exit', status: run.status, code, isError,
+    result: typeof r.result === 'string' ? r.result : '',
+    costUsd: r.total_cost_usd ?? r.cost_usd ?? null, durationMs: r.duration_ms ?? null,
+    numTurns: r.num_turns ?? null, sessionId: r.session_id ?? null,
+    error: isError ? (run.cancelled ? 'Execução cancelada pelo operador.' : run.timedOut ? 'Tempo limite excedido.' : error || `claude saiu com código ${code}`) : null,
+  };
+  pushEvent(run, exit);
+  if (run.persist) try { store.finishRun(run, exit); } catch (e) { console.warn(`Histórico da execução ${run.id} não finalizado: ${e.message}`); }
+  for (const res of run.clients) res.end();
+  run.clients.clear();
+  for (const file of [run.sysFile, run.settingsFile, run.agentsFile]) if (file) fsp.rm(file, { force: true }).catch(() => {});
+  run.child = null;
+  // Keep finished runs for 30 minutes so late subscribers can replay.
+  setTimeout(() => runs.delete(run.id), 30 * 60 * 1000).unref();
 }
 
 function runSummary(r) {
-  return { id: r.id, status: r.status, label: r.label, ...r.meta, project: r.project, startedAt: r.startedAt, endedAt: r.endedAt, cwd: r.cwd, events: r.events.length };
+  return { id: r.id, status: r.status, phase: r.phase, label: r.label, ...r.meta, project: r.project, startedAt: r.startedAt, endedAt: r.endedAt, cwd: r.cwd, events: r.events.length };
 }
 
 /* ---------- settings.json ---------- */
@@ -583,6 +709,13 @@ async function handle(req, res) {
       if (Number.isInteger(n) && n >= 1 && n <= 8) maxConcurrent = n;
       return json(res, 200, { ok: true, maxConcurrent });
     }
+    // Approved feature of a linked operation: DELETE /api/worktrees/<project folder>/<feature>.
+    if (parts[1] === 'worktrees' && req.method === 'DELETE' && parts.length === 4) {
+      if (!FOLDER_RE.test(parts[3])) return fail(res, 400, 'Identificador de feature inválido.');
+      const root = projectDir(parts[2]);
+      if (!fs.existsSync(path.join(root, '.git'))) return json(res, 200, { ok: true, removed: false });
+      return json(res, 200, { ok: true, ...await removeWorktree(longPath(root), parts[3]) });
+    }
     if (url.pathname === '/api/runs' && req.method === 'GET') {
       // The history comes from the database; runs still in memory report their current status.
       if (!store) return json(res, 200, { ok: true, runs: [] });
@@ -620,7 +753,7 @@ async function handle(req, res) {
         return;
       }
       if (req.method === 'POST' && parts[3] === 'cancel') {
-        if (run.status === 'running') { run.cancelled = true; pushEvent(run, { type: 'bridge', subtype: 'cancel' }); killTree(run.child); }
+        if (run.status === 'running') { run.cancelled = true; pushEvent(run, { type: 'bridge', subtype: 'cancel' }); killTree(run.child || run.prepChild); }
         return json(res, 200, { ok: true, status: run.status });
       }
       if (req.method === 'GET' && !parts[3]) return json(res, 200, { ok: true, run: runSummary(run), result: run.result });
@@ -668,7 +801,7 @@ async function handle(req, res) {
 const server = http.createServer((req, res) => { handle(req, res).catch(err => { try { fail(res, 500, err.message); } catch {} }); });
 
 function shutdown() {
-  for (const run of runs.values()) { if (run.child) { run.cancelled = true; killTree(run.child); } flushRun(run); }
+  for (const run of runs.values()) { const child = run.child || run.prepChild; if (child) { run.cancelled = true; killTree(child); } flushRun(run); }
   try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch {}
   server.close();
   // Runs still open are marked interrupted at the next start.

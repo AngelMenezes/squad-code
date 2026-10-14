@@ -544,13 +544,17 @@ test('a linked operation clones a registered repository into its folder once, ke
     assert.equal(res.status, 201, await res.clone().text());
     const { runId, args } = await res.json();
     const dir = path.join(projectsRoot, 'op-010-billing');
-    assert.ok(existsSync(path.join(dir, 'README.md')));
     assert.ok(args[args.indexOf('--disallowedTools') + 1].split(',').includes('Bash(git push:*)'));
-    const init = (await collect(runId)).find(e => e.type === 'system' && e.subtype === 'init');
+    const first = await collect(runId);
+    assert.ok(first.some(e => e.type === 'bridge' && e.subtype === 'prepare' && e.step === 'clone'));
+    assert.ok(existsSync(path.join(dir, 'README.md')));
+    const init = first.find(e => e.type === 'system' && e.subtype === 'init');
     assert.equal(path.resolve(init.gitTop).toLowerCase(), realpathSync.native(dir).toLowerCase());
     // Later runs reuse the clone: the agents' work stays.
     writeFileSync(path.join(dir, 'notes.md'), 'x');
-    assert.equal((await run('op-010-billing', 'billing')).status, 201);
+    const second = await run('op-010-billing', 'billing');
+    assert.equal(second.status, 201);
+    assert.ok(!(await collect((await second.json()).runId)).some(e => e.subtype === 'prepare'));
     assert.ok(existsSync(path.join(dir, 'notes.md')));
     // A folder that already holds work is not taken over; the empty repository of an earlier git init gives way.
     const used = path.join(projectsRoot, 'op-011-used');
@@ -560,10 +564,133 @@ test('a linked operation clones a registered repository into its folder once, ke
     assert.match((await busy.json()).error, /já tem arquivos/);
     const early = path.join(projectsRoot, 'op-012-early');
     execFileSync('git', ['init', '-q', early], { stdio: 'ignore' });
-    assert.equal((await run('op-012-early', 'billing')).status, 201);
+    const reinit = await run('op-012-early', 'billing');
+    assert.equal(reinit.status, 201);
+    await collect((await reinit.json()).runId);
     assert.ok(existsSync(path.join(early, 'README.md')));
     // Without a project folder the link is refused.
     const loose = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, repo: 'billing' } }) });
     assert.equal(loose.status, 400);
+  } finally { rmSync(reposFile, { force: true }); }
+});
+
+test('each feature of a linked operation works in its own worktree, prepared once, and approval removes it but keeps the branch', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main');
+  writeFileSync(path.join(src, 'README.md'), '# Portal\n'); writeFileSync(path.join(src, 'CLAUDE.md'), 'base\n');
+  writeFileSync(path.join(src, '.gitignore'), 'prepared.txt\n');
+  gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'init');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'portal', path: src, baseBranch: 'main', prepare: `node -e "require('fs').writeFileSync('prepared.txt','ok')"` }] }));
+  const folder = 'op-020-portal', root = path.join(projectsRoot, folder);
+  const run = (options, prompt = 'trabalhar') => api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt, options: { project: folder, repo: 'portal', ...options } }) });
+  try {
+    // First step of F01: a worktree on squad/f01-aaaaaa from the base branch, prepared, outside the clone's status.
+    const res = await run({ feature: 'f01-aaaaaa' }, 'trabalhar GITCHECK');
+    assert.equal(res.status, 201, await res.clone().text());
+    const { runId, cwd } = await res.json();
+    const wt = path.join(root, '.wt', 'f01-aaaaaa');
+    const events = await collect(runId);
+    assert.equal(cwd.toLowerCase(), realpathSync.native(wt).toLowerCase());
+    const init = events.find(e => e.type === 'system' && e.subtype === 'init');
+    assert.equal(path.resolve(init.gitTop).toLowerCase(), realpathSync.native(wt).toLowerCase());
+    // The clone's own CLAUDE.md (base branch) is not loaded on top of the worktree's.
+    assert.ok(init.settings.claudeMdExcludes.includes(`${realpathSync.native(root).replace(/\\/g, '/')}/CLAUDE.md`));
+    const info = events.find(e => e.type === 'bridge' && e.subtype === 'worktree');
+    assert.equal(info.branch, 'squad/f01-aaaaaa');
+    assert.equal(info.created, true);
+    assert.match(info.prepare, /Preparo concluído/);
+    assert.equal(gitIn(wt, 'branch', '--show-current'), 'squad/f01-aaaaaa');
+    assert.ok(existsSync(path.join(wt, 'prepared.txt')));
+    assert.equal(gitIn(root, 'status', '--porcelain'), '');
+    // Next step of the same feature: same worktree, no second prepare.
+    rmSync(path.join(wt, 'prepared.txt'));
+    const again = await run({ feature: 'f01-aaaaaa' });
+    const againInfo = (await collect((await again.json()).runId)).find(e => e.subtype === 'worktree');
+    assert.equal(againInfo.created, false);
+    assert.equal(againInfo.prepare, null);
+    assert.ok(!existsSync(path.join(wt, 'prepared.txt')));
+    // Plans and chats (no feature) stay in the clone.
+    assert.equal((await (await run({})).json()).cwd.toLowerCase(), realpathSync.native(root).toLowerCase());
+    // While docs/squad is only on the reconnaissance branch, a new feature starts from it.
+    const recon = await run({ feature: 'f00-bbbbbb' });
+    await collect((await recon.json()).runId);
+    const reconWt = path.join(root, '.wt', 'f00-bbbbbb');
+    mkdirSync(path.join(reconWt, 'docs', 'squad'), { recursive: true });
+    writeFileSync(path.join(reconWt, 'docs', 'squad', 'mapa.md'), '# Mapa\n');
+    gitIn(reconWt, 'add', '.'); gitIn(reconWt, 'commit', '-q', '-m', 'mapa');
+    const f02 = await run({ feature: 'f02-cccccc', featureBase: 'f00-bbbbbb' });
+    const f02Info = (await collect((await f02.json()).runId)).find(e => e.subtype === 'worktree');
+    assert.match(f02Info.notes.join(' '), /squad\/f00-bbbbbb/);
+    assert.ok(existsSync(path.join(root, '.wt', 'f02-cccccc', 'docs', 'squad', 'mapa.md')));
+    // Approval: uncommitted work keeps the worktree; once committed it goes and the branch stays.
+    writeFileSync(path.join(wt, 'wip.md'), 'x');
+    const dirty = await api(`/api/worktrees/${folder}/f01-aaaaaa`, { method: 'DELETE' });
+    assert.equal(dirty.status, 409);
+    gitIn(wt, 'add', 'wip.md'); gitIn(wt, 'commit', '-q', '-m', 'wip');
+    const removed = await (await api(`/api/worktrees/${folder}/f01-aaaaaa`, { method: 'DELETE' })).json();
+    assert.equal(removed.removed, true);
+    assert.ok(!existsSync(wt));
+    assert.equal(gitIn(root, 'rev-parse', '--verify', '-q', 'refs/heads/squad/f01-aaaaaa').length, 40);
+    assert.equal((await (await api(`/api/worktrees/${folder}/f01-aaaaaa`, { method: 'DELETE' })).json()).removed, false);
+    // Refusals: a feature without a linked repository, and ids that are not plain slugs.
+    assert.equal((await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: 'op-021-plain', feature: 'f01-aaaaaa' } }) })).status, 400);
+    for (const feature of ['../x', 'F01', 'a/b']) assert.equal((await run({ feature })).status, 400, feature);
+    assert.equal((await api(`/api/worktrees/${folder}/F01.x`, { method: 'DELETE' })).status, 400);
+    assert.equal((await api(`/api/worktrees/Op..x/f01-aaaaaa`, { method: 'DELETE' })).status, 400);
+  } finally { rmSync(reposFile, { force: true }); }
+});
+
+test('a linked run answers at once and prepares as its own phase: live output, cancel mid-way, and a failed prepare stops the agent', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const git = (...a) => execFileSync('git', ['-C', src, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
+  git('init', '-q'); git('checkout', '-q', '-b', 'main');
+  writeFileSync(path.join(src, 'README.md'), '# App\n'); git('add', '.'); git('commit', '-q', '-m', 'init');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  const node = code => `node -e "${code}"`;
+  writeFileSync(reposFile, JSON.stringify({ repos: [
+    { id: 'slow', path: src, prepare: node("console.log('instalando');setTimeout(()=>{},30000)") },
+    { id: 'fail', path: src, prepare: node("console.error('sem rede');process.exit(3)") },
+  ] }));
+  const run = (project, repo) => api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project, repo, feature: 'f01-aaaaaa' } }) });
+  // Reads the live event stream until an event matches, then lets go of it.
+  const waitFor = async (runId, pred) => {
+    const ctl = new AbortController(), res = await fetch(`${BASE}/api/runs/${runId}/events?token=${token}`, { signal: ctl.signal });
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error('evento não chegou');
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const l of lines) if (l.startsWith('data: ') && pred(JSON.parse(l.slice(6)))) { ctl.abort(); return; }
+    }
+  };
+  try {
+    // The answer comes before the clone and the 30 s prepare; the output arrives live; cancel kills it and the agent never starts.
+    const t0 = Date.now();
+    const res = await run('op-030-slow', 'slow');
+    assert.equal(res.status, 201, await res.clone().text());
+    assert.ok(Date.now() - t0 < 5000);
+    const { runId } = await res.json();
+    await waitFor(runId, e => e.subtype === 'prepare-log' && /instalando/.test(e.text));
+    assert.equal((await (await api(`/api/runs/${runId}`)).json()).run.phase, 'preparing');
+    assert.equal((await (await api(`/api/runs/${runId}/cancel`, { method: 'POST' })).json()).ok, true);
+    const events = await collect(runId);
+    assert.deepEqual(events.filter(e => e.subtype === 'prepare').map(e => e.step), ['clone', 'fetch', 'worktree', 'prepare']);
+    assert.equal(events.at(-1).status, 'cancelled');
+    assert.ok(!events.some(e => e.subtype === 'spawned'));
+    assert.ok(Date.now() - t0 < 20000);
+    assert.ok(!existsSync(path.join(projectsRoot, 'op-030-slow', '.git', 'squad-prepared-f01-aaaaaa')));
+    // A failed prepare ends the run as an error with its output, without starting claude; the next run tries it again.
+    const failed = await collect((await (await run('op-031-fail', 'fail')).json()).runId);
+    assert.equal(failed.at(-1).status, 'error');
+    assert.match(failed.at(-1).error, /código 3[\s\S]*sem rede/);
+    assert.ok(!failed.some(e => e.subtype === 'spawned'));
+    const retry = await collect((await (await run('op-031-fail', 'fail')).json()).runId);
+    assert.ok(retry.some(e => e.subtype === 'prepare' && e.step === 'prepare'));
   } finally { rmSync(reposFile, { force: true }); }
 });

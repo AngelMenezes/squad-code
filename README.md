@@ -299,7 +299,7 @@ Uma operação pode partir de um repositório existente em vez de uma pasta vazi
 ```json
 {
   "repos": [
-    { "id": "faturamento", "name": "Faturamento", "path": "C:/code/faturamento", "baseBranch": "main" },
+    { "id": "faturamento", "name": "Faturamento", "path": "C:/code/faturamento", "baseBranch": "main", "prepare": "npm ci" },
     { "id": "portal", "name": "Portal", "url": "https://github.com/empresa/portal.git", "baseBranch": "develop" }
   ]
 }
@@ -309,9 +309,20 @@ No briefing da operação, escolha o repositório em **REPOSITÓRIO EXISTENTE**.
 
 - Na primeira execução a pasta da operação vira um **clone** do repositório (`git clone`). Os agentes nunca mexem na
   sua cópia de trabalho, e `git push` fica bloqueado: os envios ficam com você.
+- Cada feature trabalha no seu próprio **worktree**, `projects/<pasta>/.wt/<feature>`, na branch `squad/<feature>`
+  (por exemplo `squad/f03-a1b2c3`). Ele é criado na primeira etapa a partir da branch base atualizada (`git fetch`), e as
+  etapas seguintes da rota usam o mesmo. Features diferentes não se misturam, e o plano do comandante e os chats ficam no
+  clone. Se o repositório tiver `prepare` (por exemplo `npm ci`), o bridge roda esse comando uma vez em cada worktree
+  novo, antes da primeira etapa.
+- O clone, o `git fetch`, o worktree e o `prepare` são a fase de **preparo** da etapa: o chat mostra o passo em andamento
+  ("está preparando o worktree"), o console mostra a saída do comando ao vivo e **Encerrar** interrompe o preparo. Se o
+  `prepare` falhar, a etapa termina com o erro e o agente não começa; a próxima execução tenta preparar de novo.
+- Ao **aprovar** a entrega, o worktree é removido e a branch `squad/<feature>` continua no clone, pronta para você
+  enviar e abrir o PR. Se houver mudanças sem commit, o worktree fica e o app avisa.
 - A F00 deixa de ser o setup e vira **Reconhecimento do projeto**. Ela mapeia o código em `docs/squad/` (mapa,
-  arquitetura, convenções, comandos e o commit de referência em `.reconhecimento`) na branch `squad/reconhecimento`, e
-  preenche os campos ainda vazios da documentação do projeto (visão, escopo, glossário, arquitetura e ADRs).
+  arquitetura, convenções, comandos e o commit de referência em `.reconhecimento`) e preenche os campos ainda vazios da
+  documentação do projeto (visão, escopo, glossário, arquitetura e ADRs). Enquanto o mapa não chega à branch base, as
+  features seguintes partem da branch da F00, para já terem `docs/squad/`.
 - Até a documentação ficar completa, a execução roda só a F00, que precisa apenas de nome, briefing e squad. Depois
   disso, as features seguintes leem `docs/squad/` em vez de varrer o código a cada execução.
 
