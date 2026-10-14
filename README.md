@@ -101,7 +101,7 @@ No GitLab e no Bitbucket o recurso se chama, respectivamente, *Protected branche
 ### 1. Clone o repositório
 
 ```sh
-git clone https://github.com/felipeAguiarCode/squad-code-network.git
+git clone https://github.com/AngelMenezes/squad-code-network.git
 cd squad-code-network
 ```
 
