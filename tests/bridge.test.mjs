@@ -751,3 +751,61 @@ test('map freshness comes from git: fresh, changed (list in the prompt), stale o
     assert.equal((await check(false, 'nomap', other)).status, 'missing');
   } finally { rmSync(reposFile, { force: true }); }
 });
+
+test('merges: the plan gets the map, a branch is pushed by the person, and merged means history or identical content', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  const put = (cwd, file, text) => { mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true }); writeFileSync(path.join(cwd, file), text); };
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main');
+  put(src, 'src/a.js', 'a\n'); gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'init');
+  const base = gitIn(src, 'rev-parse', 'HEAD');
+  put(src, 'docs/squad/mapa.md', '# Mapa do Portal\n- src/a.js: entrada\n'); put(src, 'docs/squad/.reconhecimento', `${base}\n`);
+  gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'mapa');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'merges', path: src, baseBranch: 'main' }] }));
+  const folder = 'op-050-merges', root = path.join(projectsRoot, folder);
+  const go = async options => collect((await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: folder, repo: 'merges', ...options } }) })).json()).runId);
+  const merges = async (fetch, ...branches) => (await (await api(`/api/map/${folder}?repo=merges${fetch ? '&fetch=1' : ''}&branches=${branches.join(',')}`)).json()).merges;
+  try {
+    // The commander's plan run gets the map from the base branch.
+    const plan = await go({ withMap: true });
+    assert.match(plan.at(-1).result, /## Mapa do repositório \(docs\/squad\/mapa\.md\)[\s\S]*# Mapa do Portal/);
+    // Three approved features: two with commits, one without.
+    for (const [slug, file] of [['f01-aaaaaa', 'src/f1.js'], ['f02-bbbbbb', 'src/f2.js'], ['f03-cccccc', null]]) {
+      await go({ feature: slug });
+      const wt = path.join(root, '.wt', slug);
+      if (file) { put(wt, file, `${slug}\n`); gitIn(wt, 'add', '.'); gitIn(wt, 'commit', '-q', '-m', slug); }
+      assert.equal((await api(`/api/worktrees/${folder}/${slug}`, { method: 'DELETE' })).status, 200);
+    }
+    let m = await merges(false, 'squad/f01-aaaaaa', 'squad/f03-cccccc', 'squad/f09-zzzzzz');
+    assert.deepEqual([m['squad/f01-aaaaaa'].merged, m['squad/f03-cccccc'].empty, m['squad/f09-zzzzzz'].exists], [false, true, false]);
+    // Agents cannot push, whatever the form: origin has no push URL, and the pre-push hook refuses an explicit URL.
+    assert.throws(() => gitIn(root, 'push', 'origin', 'squad/f01-aaaaaa'));
+    assert.throws(() => gitIn(root, 'push', src, 'squad/f01-aaaaaa:refs/heads/escapou'));
+    assert.equal(gitIn(src, 'branch', '--list', 'escapou'), '');
+    // The plan's paths are checked on the base branch (files and folders); unsafe ones never exist.
+    const paths = await (await api(`/api/paths/${folder}`, { method: 'POST', body: JSON.stringify({ repo: 'merges', paths: ['src/a.js', './docs/squad/', 'src/nope.js', '../fora', 'C:/abs'] }) })).json();
+    assert.equal(paths.checked, true);
+    assert.deepEqual(paths.exists, { 'src/a.js': true, 'docs/squad': true, 'src/nope.js': false, '../fora': false, 'C:/abs': false });
+    assert.equal((await (await api('/api/paths/op-051-none', { method: 'POST', body: JSON.stringify({ repo: 'merges', paths: ['src/a.js'] }) })).json()).checked, false);
+    // The person sends F01's branch; a local origin has no pull request page.
+    const pushed = await (await api(`/api/branches/${folder}/push`, { method: 'POST', body: JSON.stringify({ repo: 'merges', branch: 'squad/f01-aaaaaa' }) })).json();
+    assert.deepEqual([pushed.ok, pushed.pr, pushed.local], [true, null, true]);
+    assert.equal(gitIn(src, 'rev-parse', '--verify', '-q', 'refs/heads/squad/f01-aaaaaa').length, 40);
+    // The team merges F01 with a merge commit and F02 as a squash (same content, other commit).
+    gitIn(src, 'merge', '-q', '--no-ff', '-m', 'PR F01', 'squad/f01-aaaaaa');
+    put(src, 'src/f2.js', 'f02-bbbbbb\n'); gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'PR F02 (squash)');
+    m = await merges(true, 'squad/f01-aaaaaa', 'squad/f02-bbbbbb', 'squad/f03-cccccc');
+    assert.deepEqual([m['squad/f01-aaaaaa'].how, m['squad/f02-bbbbbb'].how, m['squad/f03-cccccc'].merged], ['history', 'content', false]);
+    // Later commits change the squashed file again: the merge is still found in the base's history.
+    put(src, 'src/f2.js', 'f02 alterado depois\n'); gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'depois do squash');
+    m = await merges(true, 'squad/f02-bbbbbb');
+    assert.equal(m['squad/f02-bbbbbb'].how, 'content');
+    // Refusals.
+    assert.equal((await api(`/api/map/${folder}?repo=merges&branches=main`)).status, 400);
+    assert.equal((await api(`/api/branches/${folder}/push`, { method: 'POST', body: JSON.stringify({ repo: 'merges', branch: 'main' }) })).status, 400);
+    assert.equal((await api(`/api/branches/${folder}/push`, { method: 'POST', body: JSON.stringify({ repo: 'merges', branch: 'squad/f09-zzzzzz' }) })).status, 404);
+    assert.equal((await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, withMap: true } }) })).status, 201);
+  } finally { rmSync(reposFile, { force: true }); }
+});

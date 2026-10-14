@@ -79,7 +79,16 @@ command once (`prepareWorktree`, marker in `.git/squad-prepared-<feature>`, 15 m
 `docs/squad/.reconhecimento` (or, if it left the history, the last base commit before the date there) against `origin/<baseBranch>`,
 outside `docs/squad`: 'fresh', 'changed', 'stale' (`STRUCTURAL_RE` paths, top-level folders added/removed, or > `MAP_SMALL`
 files), 'unknown', 'missing'. Feature steps get a `bridge`/`map` event and, unless fresh/missing, the changed files appended to
-their prompt (`mapPromptNote` → `run.promptExtra`); `GET /api/map/:folder?repo=<id>[&fetch=1]` answers the same for the page. `/api/health` sends `repos` (`publicRepos`: ids,
+their prompt (`mapPromptNote` → `run.promptExtra`); `GET /api/map/:folder?repo=<id>[&fetch=1]` answers the same for the page.
+With `&branches=squad/a,...` it also answers `merges` (`mergeState`: merged by history, or by content after a squash/rebase when
+some base commit since the fork point (newest 60 touching those files) had every file the branch changed exactly as the branch has
+it, so later changes to them do not hide the merge; `empty` when the branch has no commits since `startMark`, written at worktree
+creation and kept). Agents never push: `guardClone` (before every linked run) sets `remote.origin.pushurl` to `NO_PUSH_URL` and
+writes the `PRE_PUSH` hook, which only lets a push through with `SQUAD_BRIDGE_PUSH=1`; `POST /api/branches/:folder/push {repo,
+branch}` (`BRANCH_NAME_RE`, person-initiated) pushes to the origin's fetch URL with that mark and returns `pr` (`prUrl`, GitHub
+origins) and `local`. `POST /api/paths/:folder {repo, paths}` checks paths on the base branch (`git cat-file -e`; unsafe ones are
+false; `checked:false` before the clone). `withMap: true` (plan runs) appends
+`docs/squad/mapa.md` from the base, or the clone, plus the change list (`mapForPlan`). `/api/health` sends `repos` (`publicRepos`: ids,
 names, branches, errors; never the path or URL). An explicit `cwd` stays as a fallback
 (tests, direct API use); a run with neither `project` nor `cwd` is refused (never `process.cwd()`, the app folder). The step prompt
 (`buildStepPrompt`) and `CALLED_AGENT_SYSTEM` tell agents to keep every file inside the folder. The settings.json project/local scopes
@@ -267,6 +276,14 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   base) and shows `mapNoticeHTML`; **Atualizar mapa** (`createMapUpdate`) adds one feature with `mapUpdate: true` (persisted, scope
   `architect`, `MAP_UPDATE_FEATURE`/`MAP_UPDATE_BRIEF`, its own section in `buildStepPrompt`) that rewrites only the affected parts
   of `docs/squad` from the list the bridge appends.
+  Merges: approving a feature of a linked operation sets `f.merge = {branch, state:'pending', at}` (persisted, normalized); it lands
+  only when merged (`featureLanded`, used by `depsReady`/`pendingDeps`/`blockedWhy`), so dependents wait ("Aguarda merge" on the
+  kanban). `mapCheck` sends the pending branches and `applyMerges` lands the merged ones; `mergeNoticeHTML` (shown during runs too)
+  offers **Enviar branch** (`pushBranch`, confirmAction, PR link in `ui.mergePr`), **Marcar como mergeada** (`markMerged`) and
+  **Verificar merges**; `mergeRefresh` (window focus/visible) checks with fetch, quietly, at most every 2 minutes while merges are
+  pending. The commander's plan of a linked operation runs with `withMap` and asks for `files` per codename; `checkPlanPaths` has the
+  bridge check them on the base before the plan card (missing ones are listed in the room), and `validatePlan(data, suggest, keep)`
+  drops unsafe and missing paths and closes each brief with "Comece lendo: ...".
 - **Exportar** (operation header) → `exportProject`/`projectExportFiles`: a store-only `.zip` (`zipFiles`) with
   `CLAUDE.md`, `docs/{project,architecture,standards,features/<NNN-slug>}` and `.claude/{agents,commands,settings.json}`.
   `docs/standards` is compiled from the squad's DIRETRIZES (`STANDARD_FILES`); simulated-only progress exports as

@@ -76,6 +76,24 @@ Ubuntu 20.04+, Debian 10+ ou Alpine 3.19+; 4 GB de RAM; conexão com a internet.
 
 O projeto tem **uma única dependência npm**, o `better-sqlite3` (banco SQLite local), instalada com `npm install`.
 
+### Recomendado ao vincular repositórios existentes
+
+Se você vai [trabalhar em um projeto que já existe](#trabalhar-em-um-projeto-que-já-existe), ative a **proteção da
+branch base** (*branch protection*) em cada repositório vinculado, no servidor onde ele fica hospedado.
+
+O SQUAD/CODE bloqueia o push dos agentes no clone da operação, mas os agentes rodam com as suas credenciais de git, e
+um bloqueio local pode ser contornado de propósito. A proteção no servidor é a garantia de que nada chega à branch base
+sem pull request.
+
+No GitHub: **Settings → Branches → Add branch ruleset** (ou *Add rule*) para a branch base (por exemplo `main`), com:
+
+- **Require a pull request before merging**, de preferência com pelo menos uma aprovação;
+- **Block force pushes**;
+- **Restrict deletions**.
+
+Guia oficial: [Sobre branches protegidos](https://docs.github.com/pt/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
+No GitLab e no Bitbucket o recurso se chama, respectivamente, *Protected branches* e *Branch permissions*.
+
 ---
 
 ## 📦 Instalação
@@ -317,8 +335,25 @@ No briefing da operação, escolha o repositório em **REPOSITÓRIO EXISTENTE**.
 - O clone, o `git fetch`, o worktree e o `prepare` são a fase de **preparo** da etapa: o chat mostra o passo em andamento
   ("está preparando o worktree"), o console mostra a saída do comando ao vivo e **Encerrar** interrompe o preparo. Se o
   `prepare` falhar, a etapa termina com o erro e o agente não começa; a próxima execução tenta preparar de novo.
-- Ao **aprovar** a entrega, o worktree é removido e a branch `squad/<feature>` continua no clone, pronta para você
-  enviar e abrir o PR. Se houver mudanças sem commit, o worktree fica e o app avisa.
+- Ao **aprovar** a entrega, o worktree é removido e a branch `squad/<feature>` continua no clone. Se houver mudanças sem
+  commit, o worktree fica e o app avisa.
+- **A feature aprovada fica "aguardando merge".** As features que dependem dela só rodam depois que a branch chegar à
+  branch base, porque elas partem da base. O aviso **Aguardando merge** na página da operação lista essas branches:
+  - **Enviar branch:** o bridge faz o `git push` da branch para a origem do repositório, só quando você clica. Com origem
+    no GitHub, o aviso mostra o link para abrir o PR.
+  - **Verificar merges:** faz `git fetch` e confere cada branch. Conta como mergeada a branch que entrou no histórico da
+    base (merge ou fast-forward) e também a que entrou por squash: algum commit da base deixou todos os arquivos que ela
+    mudou exatamente como na branch, mesmo que a base tenha mudado esses arquivos depois. Uma branch sem commits aparece
+    como "sem commits". Ao voltar para a aba do app, a verificação roda sozinha (no máximo a cada 2 minutos).
+  - **Marcar como mergeada:** confirmação manual, para quando a verificação não consegue reconhecer o merge.
+- O comandante planeja com o mapa: ele recebe `docs/squad/mapa.md` e a lista de mudanças desde o mapa, e indica por quais
+  arquivos cada colega começa ("Comece lendo: …" na instrução de cada um). Antes de você aprovar o plano, o bridge
+  confere cada caminho na branch base; os que não existem saem das instruções e são listados no chat da operação.
+- **Os agentes não enviam nada.** No clone, o `origin` fica sem URL de envio e um hook `pre-push` recusa qualquer push
+  que não venha do botão **Enviar branch**. Isso barra também formas indiretas (`git -C . push`, outro remote), mas
+  quem reescrever a configuração do git ou usar `--no-verify` de propósito passa. A proteção de verdade fica no
+  servidor: ative a **proteção da branch base** no GitHub (exigir pull request) nos repositórios que vincular.
+  Repositórios com `core.hooksPath` próprio (como o husky) ignoram esse hook, e aí vale só o bloqueio do `origin`.
 - A F00 deixa de ser o setup e vira **Reconhecimento do projeto**. Ela mapeia o código em `docs/squad/` (mapa,
   arquitetura, convenções, comandos e o commit de referência em `.reconhecimento`) e preenche os campos ainda vazios da
   documentação do projeto (visão, escopo, glossário, arquitetura e ADRs). Enquanto o mapa não chega à branch base, as
@@ -451,6 +486,9 @@ squad-code-network/
   cabeçalhos `Host`/`Origin` precisam ser locais.
 - As opções enviadas ao Claude Code são validadas por whitelist e o prompt vai por stdin, sem interpolação em shell.
 - O modo de permissão `bypassPermissions` desliga todas as verificações do Claude Code: use só em ambientes isolados.
+- Em repositórios vinculados, os agentes não conseguem enviar branches pelo clone, mas ative também a
+  [proteção da branch base](#recomendado-ao-vincular-repositórios-existentes) no servidor: é ela que garante que nada
+  chega à `main` sem pull request.
 - **Execuções reais são cobradas na sua conta Claude.** Use o orçamento máximo por etapa, o tempo limite e o modo demo
   para controlar o gasto. O console (tecla `C`) mostra o custo de cada etapa.
 

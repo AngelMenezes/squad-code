@@ -186,8 +186,8 @@ function loadRepos() {
 const publicRepos = () => { const r = loadRepos(); return { file: r.file, error: r.error, repos: r.repos.map(({ id, name, baseBranch, error }) => ({ id, name, baseBranch, error })) }; };
 
 // track(child) receives each git process, so a cancelled run can kill the one in progress.
-const gitRun = (args, cwd, timeout = 15000, track) => new Promise((resolve, reject) => {
-  const child = execFile('git', args, { cwd, windowsHide: true, timeout, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling(), GIT_TERMINAL_PROMPT: '0' } },
+const gitRun = (args, cwd, timeout = 15000, track, env = {}) => new Promise((resolve, reject) => {
+  const child = execFile('git', args, { cwd, windowsHide: true, timeout, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling(), GIT_TERMINAL_PROMPT: '0', ...env } },
     (err, out, errOut) => err ? reject(Object.assign(new Error(String(errOut || err.message).trim().slice(0, 500)), { code: err.code })) : resolve(String(out).trim()));
   track?.(child);
 });
@@ -220,6 +220,17 @@ async function cloneProject(dir, repo, state, track) {
   try { await gitRun(['clone', '-q', ...(repo.baseBranch ? ['--branch', repo.baseBranch] : []), '--', repo.source, dir], PROJECTS_DIR, 600000, track); }
   catch (e) { throw new Error(e.code === 'ENOENT' ? 'Git não encontrado: instale o Git para vincular um repositório existente.' : `git clone de ${repo.id} falhou: ${e.message}`); }
 }
+/* Agents never push, whatever the command looks like (git -C . push, sh -c, another remote): the clone's origin has no push URL,
+ * and a pre-push hook refuses any push without the bridge's mark (SQUAD_BRIDGE_PUSH), which only "Enviar branch" sets. Both are
+ * re-applied before every run. They do not stop someone who rewrites the git config or passes --no-verify on purpose: the real
+ * guarantee is the server's (branch protection on the base branch). A repository with its own core.hooksPath skips the hook. */
+const NO_PUSH_URL = 'no-push://squad-code-use-enviar-branch';
+const PRE_PUSH = '#!/bin/sh\n# SQUAD/CODE: os agentes não enviam branches; use "Enviar branch" no app.\n[ "$SQUAD_BRIDGE_PUSH" = "1" ] && exit 0\necho "SQUAD/CODE: push bloqueado. Use Enviar branch no app." >&2\nexit 1\n';
+async function guardClone(root) {
+  await gitRun(['config', 'remote.origin.pushurl', NO_PUSH_URL], root).catch(() => {});
+  const hook = path.join(root, '.git', 'hooks', 'pre-push');
+  try { if (!fs.existsSync(hook) || fs.readFileSync(hook, 'utf8') !== PRE_PUSH) { fs.mkdirSync(path.dirname(hook), { recursive: true }); fs.writeFileSync(hook, PRE_PUSH, { mode: 0o755 }); } } catch {}
+}
 
 /* Linked operations: each feature works in its own git worktree of the operation's clone, <clone>/.wt/<feature> on branch
  * squad/<feature>, created on its first run from the freshly fetched base branch and reused until its approval removes it (the branch
@@ -228,6 +239,8 @@ async function cloneProject(dir, repo, state, track) {
  * preparing phase (prepareRun): say(step, text) reports each step. */
 const WT_DIR = '.wt';
 const preparedMark = (root, slug) => path.join(root, '.git', `squad-prepared-${slug}`);
+// Commit a feature branch started from, kept after approval: a branch without commits of its own is not reported as merged.
+const startMark = (root, slug) => path.join(root, '.git', `squad-start-${slug}`);
 const gitOk = (args, cwd) => gitRun(args, cwd).then(() => true, () => false);
 async function ensureWorktree(root, repo, slug, baseSlug, track, say) {
   const dir = path.join(root, WT_DIR, slug), branch = `squad/${slug}`, notes = [];
@@ -251,6 +264,7 @@ async function ensureWorktree(root, repo, slug, baseSlug, track, say) {
       }
       say('worktree', `Criando o worktree na branch ${branch}.`);
       await gitRun(['worktree', 'add', '-q', '-b', branch, dir, start], root, 120000, track);
+      try { fs.writeFileSync(startMark(root, slug), await gitRun(['rev-parse', `${start}^{commit}`], root)); } catch {}
     }
   } catch (e) { throw new Error(e.code === 'ENOENT' ? 'Git não encontrado.' : `Não foi possível criar o worktree ${slug}: ${e.message}`); }
   return { dir, branch, notes, created: true };
@@ -315,6 +329,39 @@ function mapPromptNote(m) {
   if (!['changed', 'stale', 'unknown'].includes(m?.status)) return '';
   if (m.status === 'unknown') return '\n\n## Mapa do repositório sem referência\nNão foi possível achar o commit descrito em docs/squad/.reconhecimento na branch base. Confira a estrutura dos trechos do mapa que você usar antes de confiar neles.';
   return `\n\n## Mudanças no repositório desde o mapa (docs/squad)\nO mapa descreve o commit ${m.ref}${m.date ? ` (${m.date})` : ''}${m.fallback ? ', achado pela data porque o commit registrado saiu do histórico' : ''}. Desde então, ${m.total} arquivo${m.total > 1 ? 's mudaram' : ' mudou'} fora de docs/squad (A = novo, M = alterado, D = removido):\n${m.files.join('\n')}${m.total > m.files.length ? `\n(e mais ${m.total - m.files.length})` : ''}\nLeia desses arquivos só os que importam para a sua tarefa; o resto do mapa continua valendo.${m.status === 'stale' ? `\nO mapa está desatualizado${m.structural.length ? ` (mudanças estruturais: ${m.structural.slice(0, 8).join(', ')})` : ''}: confira a estrutura dos trechos que você usar e registre no relatório o que o mapa precisa corrigir.` : ''}`;
+}
+
+/** The commander's plan of a linked operation gets docs/squad/mapa.md from the base branch (or the clone, before the merge). */
+async function mapForPlan(root, repo) {
+  let target = baseRef(repo), text = await gitRun(['show', `${target}:docs/squad/mapa.md`], root).catch(() => '');
+  if (!text) { target = 'HEAD'; text = await gitRun(['show', 'HEAD:docs/squad/mapa.md'], root).catch(() => ''); }
+  if (!text) return '\n\n## Mapa do repositório\nAinda não há docs/squad/mapa.md: não indique arquivos.';
+  const m = await mapStatus(root, target).catch(() => null);
+  return `\n\n## Mapa do repositório (docs/squad/mapa.md)\n${text.length > 20000 ? text.slice(0, 20000) + '\n[...]' : text}${mapPromptNote(m)}`;
+}
+
+/* Merges. A linked operation's approved feature waits for its branch to reach the base branch before its dependents run. Merged =
+ * the branch is in the base's history (merge commit, fast-forward) or, after a squash or rebase merge, every file the branch changed
+ * is identical on the base. 'empty' = the branch has no commits since it started (startMark), so there is nothing to merge. */
+const BRANCH_NAME_RE = /^squad\/[a-z0-9][a-z0-9-]{0,79}$/;
+async function mergeState(root, branch, target) {
+  if (!await gitOk(['rev-parse', '--verify', '-q', `refs/heads/${branch}^{commit}`], root)) return { exists: false, merged: false };
+  const start = (() => { try { return fs.readFileSync(startMark(root, branch.slice(6)), 'utf8').trim(); } catch { return ''; } })();
+  if (/^[0-9a-f]{40}$/.test(start) && (await gitRun(['rev-list', '--count', `${start}..${branch}`], root).catch(() => '1')) === '0') return { exists: true, merged: false, empty: true };
+  if (await gitOk(['merge-base', '--is-ancestor', branch, target], root)) return { exists: true, merged: true, how: 'history' };
+  const base = await gitRun(['merge-base', branch, target], root).catch(() => '');
+  const changed = base ? (await gitRun(['diff', '--name-only', base, branch], root)).split('\n').filter(Boolean) : [];
+  if (!changed.length || changed.length > 400) return { exists: true, merged: false };
+  // Squash or rebase: some base commit after the fork point had every file the branch changed exactly as the branch has it. Looking
+  // through those commits (newest first) still finds the merge after later commits changed the same files again.
+  const commits = (await gitRun(['log', '--format=%H', '-n', '60', `${base}..${target}`, '--', ...changed], root, 30000).catch(() => '')).split('\n').filter(Boolean);
+  for (const c of commits) if (await gitOk(['diff', '--quiet', c, branch, '--', ...changed], root)) return { exists: true, merged: true, how: 'content', at: c.slice(0, 12) };
+  return { exists: true, merged: false };
+}
+/** Pull request page for GitHub origins (https or ssh); null for anything else, such as a local folder. */
+function prUrl(origin, base, branch) {
+  const m = String(origin).match(/^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
+  return m ? `https://github.com/${m[1]}/${m[2]}/compare/${base ? `${base}...` : ''}${branch}?expand=1` : null;
 }
 
 /** Folder of a project under PROJECTS_DIR; the name is a plain slug, so it cannot leave the root. */
@@ -431,6 +478,7 @@ function validateRunOptions(o = {}) {
     out.repo = repo;
     out.disallowedTools = [...new Set([...out.disallowedTools, 'Bash(git push:*)'])];
     // A feature step works in that feature's worktree (ensureWorktree); plans and chats stay in the clone.
+    out.withMap = o.withMap === true;
     for (const k of ['feature', 'featureBase']) {
       if (o[k] === undefined || o[k] === null || o[k] === '') continue;
       if (typeof o[k] !== 'string' || !FOLDER_RE.test(o[k])) throw new Error(`Identificador de feature inválido: ${String(o[k]).slice(0, 80)}`);
@@ -550,6 +598,9 @@ async function prepareRun(run, opts, prep) {
   const track = child => { run.prepChild = child; };
   try {
     if (prep.clone !== 'ready') { say('clone', `Clonando o repositório ${opts.repo.name}.`); await cloneProject(prep.root, opts.repo, prep.clone, track); }
+    await guardClone(prep.root);
+    // The commander plans with the map (and what changed since it), so it can point each colleague to real paths.
+    if (opts.withMap && !run.cancelled) run.promptExtra = await mapForPlan(prep.root, opts.repo).catch(() => '');
     if (run.cancelled || !prep.feature) return !run.cancelled;
     const wt = await ensureWorktree(prep.root, opts.repo, prep.feature, prep.base, track, say);
     if (run.cancelled) return false;
@@ -758,7 +809,44 @@ async function handle(req, res) {
       if (!fs.existsSync(path.join(root, '.git'))) return json(res, 200, { ok: true, status: 'no-clone' });
       const dir = longPath(root);
       const fetched = url.searchParams.get('fetch') === '1' ? await gitRun(['fetch', '-q', 'origin'], dir, 300000).then(() => true, e => e.message) : null;
-      return json(res, 200, { ok: true, fetched, ...await mapStatus(dir, baseRef(repo)) });
+      // branches=squad/a,squad/b: whether each approved feature branch reached the base branch.
+      const branches = (url.searchParams.get('branches') || '').split(',').filter(Boolean).slice(0, 60);
+      if (branches.some(b => !BRANCH_NAME_RE.test(b))) return fail(res, 400, 'Branch inválida.');
+      const merges = {};
+      for (const b of branches) merges[b] = await mergeState(dir, b, baseRef(repo));
+      return json(res, 200, { ok: true, fetched, ...await mapStatus(dir, baseRef(repo)), merges });
+    }
+    // Paths the commander suggested in a plan, checked on the base branch before the person approves it:
+    // POST /api/paths/<folder> {repo, paths}. checked:false before the first clone.
+    if (parts[1] === 'paths' && req.method === 'POST' && parts.length === 3) {
+      const body = await readBody(req), repo = loadRepos().repos.find(r => r.id === body.repo);
+      if (!repo) return fail(res, 400, 'Repositório não cadastrado.');
+      const paths = (Array.isArray(body.paths) ? body.paths : []).slice(0, 200).map(x => String(x || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').slice(0, 300));
+      const root = projectDir(parts[2]);
+      if (!fs.existsSync(path.join(root, '.git'))) return json(res, 200, { ok: true, checked: false, exists: {} });
+      const dir = longPath(root);
+      let target = baseRef(repo);
+      if (!await gitOk(['rev-parse', '--verify', '-q', `${target}^{commit}`], dir)) target = 'HEAD';
+      const exists = {};
+      for (const p of paths) exists[p] = !!p && !p.startsWith('/') && !p.includes(':') && !/(^|\/)\.\.(\/|$)/.test(p) && await gitOk(['cat-file', '-e', `${target}:${p}`], dir);
+      return json(res, 200, { ok: true, checked: true, target, exists });
+    }
+    // The person sends an approved feature's branch to the clone's origin (agents never push): POST /api/branches/<folder>/push
+    // {repo, branch}. GitHub origins get the pull request link.
+    if (parts[1] === 'branches' && parts[3] === 'push' && req.method === 'POST' && parts.length === 4) {
+      const body = await readBody(req), repo = loadRepos().repos.find(r => r.id === body.repo);
+      if (!repo) return fail(res, 400, 'Repositório não cadastrado.');
+      if (!BRANCH_NAME_RE.test(String(body.branch || ''))) return fail(res, 400, 'Branch inválida.');
+      const root = projectDir(parts[2]);
+      if (!fs.existsSync(path.join(root, '.git'))) return fail(res, 404, 'A operação ainda não tem clone.');
+      const dir = longPath(root);
+      if (!await gitOk(['rev-parse', '--verify', '-q', `refs/heads/${body.branch}`], dir)) return fail(res, 404, `A branch ${body.branch} não existe no clone.`);
+      // The origin's push URL is disabled for the agents (guardClone): the bridge pushes to the fetch URL, with its mark.
+      const origin = await gitRun(['config', '--get', 'remote.origin.url'], dir).catch(() => '');
+      if (!origin) return fail(res, 409, 'O clone não tem origem.');
+      try { await gitRun(['push', '-q', origin, `refs/heads/${body.branch}:refs/heads/${body.branch}`], dir, 180000, null, { SQUAD_BRIDGE_PUSH: '1' }); }
+      catch (e) { return fail(res, 502, `git push falhou: ${e.message}`); }
+      return json(res, 200, { ok: true, branch: body.branch, pr: prUrl(origin, repo.baseBranch, body.branch), local: !REPO_URL_RE.test(origin) });
     }
     // Approved feature of a linked operation: DELETE /api/worktrees/<project folder>/<feature>.
     if (parts[1] === 'worktrees' && req.method === 'DELETE' && parts.length === 4) {
