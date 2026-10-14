@@ -12,6 +12,7 @@
  *   SQUAD_HOME        overrides the home dir used for ~/.claude/settings.json (tests)
  *   SQUAD_PROJECTS_DIR root of the per-project folders (default: ./projects next to this file)
  *   SQUAD_DATA_DIR    folder of the SQLite database, squad.db (default: ./data next to this file)
+ *   SQUAD_REPOS       list of existing repositories an operation can link to (default: SQUAD_DATA_DIR/repos.json)
  */
 const http = require('node:http');
 const fs = require('node:fs');
@@ -151,6 +152,67 @@ function ensureProjectRepo(dir) {
   });
 }
 
+/* Existing repositories an operation can link to (project.repoId). The person lists them in REPOS_FILE, read on every use (it can be
+ * edited while the bridge runs, and the bridge never writes it): {"repos":[{"id":"billing","name":"Faturamento","path":"C:/code/billing"
+ * (or "url":"https://..."),"baseBranch":"main"}]}. The page only names an id, never a path. A linked operation's folder becomes a
+ * clone of that repository (ensureProjectClone), so the agents never touch the person's own working copy. */
+const REPOS_FILE = path.resolve(process.env.SQUAD_REPOS || path.join(DATA_DIR, 'repos.json'));
+const BRANCH_RE = /^(?![-/.])(?!.*\.\.)[A-Za-z0-9._/-]{1,100}$/;
+const REPO_URL_RE = /^(https:\/\/|ssh:\/\/|git@)[^\s"']{3,500}$/;
+function loadRepos() {
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(REPOS_FILE, 'utf8')); }
+  catch (e) { return { file: REPOS_FILE, repos: [], error: e.code === 'ENOENT' ? null : `${REPOS_FILE}: ${e.message}` }; }
+  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.repos) ? raw.repos : [];
+  const seen = new Set(), repos = [];
+  for (const r of list.slice(0, 50)) {
+    const id = String(r?.id || '').trim();
+    if (!FOLDER_RE.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    const url = typeof r.url === 'string' ? r.url.trim() : '';
+    const dir = !url && typeof r.path === 'string' && r.path.trim() ? path.resolve(path.dirname(REPOS_FILE), r.path.trim()) : '';
+    const baseBranch = typeof r.baseBranch === 'string' ? r.baseBranch.trim() : '';
+    let error = null;
+    if (url) { if (!REPO_URL_RE.test(url)) error = 'URL inválida (use https://, ssh:// ou git@).'; }
+    else if (!dir) error = 'Informe "path" ou "url".';
+    else if (!fs.existsSync(path.join(dir, '.git')) && !fs.existsSync(path.join(dir, 'HEAD'))) error = 'O caminho não é um repositório git.';
+    if (baseBranch && !BRANCH_RE.test(baseBranch)) error = 'baseBranch inválida.';
+    repos.push({ id, name: String(r.name || id).slice(0, 80), source: url || (fs.existsSync(dir) ? longPath(dir) : dir), baseBranch, error });
+  }
+  return { file: REPOS_FILE, repos, error: null };
+}
+// What the page sees: no path or URL (a URL may carry credentials).
+const publicRepos = () => { const r = loadRepos(); return { file: r.file, error: r.error, repos: r.repos.map(({ id, name, baseBranch, error }) => ({ id, name, baseBranch, error })) }; };
+
+const gitRun = (args, cwd, timeout = 15000) => new Promise((resolve, reject) => {
+  execFile('git', args, { cwd, windowsHide: true, timeout, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling(), GIT_TERMINAL_PROMPT: '0' } },
+    (err, out, errOut) => err ? reject(Object.assign(new Error(String(errOut || err.message).trim().slice(0, 500)), { code: err.code })) : resolve(String(out).trim()));
+});
+const sameSource = (a, b) => {
+  const norm = s => REPO_URL_RE.test(s) ? s.replace(/\/+$/, '').replace(/\.git$/, '') : path.resolve(s).replace(/[\\/]+$/, '');
+  return IS_WIN ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
+};
+/** A linked operation's folder: cloned from the registered repository on its first run, then checked to still be that clone. */
+async function ensureProjectClone(dir, repo) {
+  if (repo.error) throw new Error(`Repositório ${repo.id}: ${repo.error}`);
+  const entries = fs.readdirSync(dir), unused = 'o vínculo com um repositório existente vale só para operações que ainda não trabalharam na pasta';
+  if (entries.includes('.git')) {
+    let origin = '';
+    try { origin = await gitRun(['remote', 'get-url', 'origin'], dir); } catch {}
+    if (origin) {
+      if (sameSource(origin, repo.source)) return;
+      throw new Error(`A pasta da operação já é clone de outro repositório, não de ${repo.id}.`);
+    }
+    // Only the empty repository of an earlier git init (a chat before the link) gives way to the clone.
+    let head = true;
+    try { await gitRun(['rev-parse', '--verify', '-q', 'HEAD'], dir); } catch { head = false; }
+    if (head || entries.length > 1) throw new Error(`A pasta da operação já tem um repositório próprio: ${unused}.`);
+    fs.rmSync(path.join(dir, '.git'), { recursive: true, force: true });
+  } else if (entries.length) throw new Error(`A pasta da operação já tem arquivos: ${unused}.`);
+  try { await gitRun(['clone', '-q', ...(repo.baseBranch ? ['--branch', repo.baseBranch] : []), '--', repo.source, dir], PROJECTS_DIR, 600000); }
+  catch (e) { throw new Error(e.code === 'ENOENT' ? 'Git não encontrado: instale o Git para vincular um repositório existente.' : `git clone de ${repo.id} falhou: ${e.message}`); }
+}
+
 /** Folder of a project under PROJECTS_DIR; the name is a plain slug, so it cannot leave the root. */
 function projectDir(name) {
   const folder = String(name || '').trim();
@@ -257,6 +319,14 @@ function validateRunOptions(o = {}) {
   // Optional hard restriction of the built-in tool set (maps to --tools). null = Claude Code defaults.
   out.tools = Array.isArray(o.tools) ? tools(o.tools) : null;
   if (out.tools) for (const t of out.tools) if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(t)) throw new Error(`Ferramenta inválida: ${t}`);
+  // Linked operation: its folder is a clone of a registered repository. Pushes stay with the person (review, PR).
+  if (typeof o.repo === 'string' && o.repo.trim()) {
+    if (!out.projectRun) throw new Error('O repositório vinculado vale só para a pasta de uma operação (opção "project").');
+    const repo = loadRepos().repos.find(r => r.id === o.repo.trim());
+    if (!repo) throw new Error(`Repositório não cadastrado: ${o.repo.trim().slice(0, 80)}. Cadastre-o em ${REPOS_FILE}.`);
+    out.repo = repo;
+    out.disallowedTools = [...new Set([...out.disallowedTools, 'Bash(git push:*)'])];
+  }
   out.addDirs = (Array.isArray(o.addDirs) ? o.addDirs : []).map(String).map(s => s.trim()).filter(Boolean).slice(0, 10).map(d => path.resolve(d));
   out.addDirs = out.addDirs.map(d => fs.existsSync(d) ? longPath(d) : d);
   for (const d of out.addDirs) if (!fs.existsSync(d)) throw new Error(`Diretório adicional inexistente: ${d}`);
@@ -303,7 +373,8 @@ async function startRun(body) {
   if (activeCount() >= maxConcurrent) throw Object.assign(new Error(`Limite de ${maxConcurrent} execuções simultâneas atingido.`), { status: 429 });
   const resolved = await resolveBin(opts.claudePath);
   if (!resolved) throw new Error(`Claude Code não encontrado ("${opts.claudePath}"). Ajuste o caminho nas configurações.`);
-  if (opts.projectRun) await ensureProjectRepo(opts.cwd);
+  if (opts.repo) await ensureProjectClone(opts.cwd, opts.repo);
+  else if (opts.projectRun) await ensureProjectRepo(opts.cwd);
 
   const id = crypto.randomUUID();
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-prompts', 'none'];
@@ -493,7 +564,7 @@ async function handle(req, res) {
     if (req.method === 'GET' && url.pathname === '/api/health') {
       const bin = url.searchParams.get('claudePath') || DEFAULT_BIN;
       const info = await claudeVersion(bin);
-      return json(res, 200, { ok: true, bridge: 'squad-code', claudeVersion: info.version, claudePath: info.resolved, claudeError: info.error, defaultCwd: process.cwd(), projectsDir: longPath(PROJECTS_DIR), home: HOME, platform: process.platform, activeRuns: activeCount(), maxConcurrent, dbReady: !setupNeeded(), dbPath: store?.file || DB_FILE });
+      return json(res, 200, { ok: true, bridge: 'squad-code', claudeVersion: info.version, claudePath: info.resolved, claudeError: info.error, defaultCwd: process.cwd(), projectsDir: longPath(PROJECTS_DIR), home: HOME, platform: process.platform, activeRuns: activeCount(), maxConcurrent, dbReady: !setupNeeded(), dbPath: store?.file || DB_FILE, repos: publicRepos() });
     }
     // First start: the page creates the database with the workspace the person chose (from scratch, the example, a backup or the
     // browser's copy). Validated before anything is written; refused once a workspace exists.

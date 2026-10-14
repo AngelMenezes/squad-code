@@ -519,3 +519,51 @@ test('chats are saved per kind, capped and swept when their feature is gone', as
   chats = pageTag(await page(), 'squad-memory').chats;
   assert.equal(chats.agent.a1, undefined);
 });
+
+test('a linked operation clones a registered repository into its folder once, keeps it, and never pushes', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const git = (...a) => execFileSync('git', ['-C', src, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
+  git('init', '-q'); git('checkout', '-q', '-b', 'main');
+  writeFileSync(path.join(src, 'README.md'), '# Faturamento\n');
+  git('add', '.'); git('commit', '-q', '-m', 'init');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'billing', name: 'Faturamento', path: src, baseBranch: 'main' }, { id: 'broken', path: path.join(src, 'nope') }, { id: 'Bad Id', path: src }, { id: 'evil', url: '--upload-pack=x' }] }));
+  const run = (project, repo, prompt = 'mapear') => api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt, options: { project, repo } }) });
+  try {
+    // The page gets ids, names and problems, never the path or URL.
+    const health = await (await api('/api/health')).json();
+    assert.deepEqual(health.repos.repos.map(r => [r.id, !!r.error]), [['billing', false], ['broken', true], ['evil', true]]);
+    assert.ok(!JSON.stringify(health.repos.repos).includes(path.basename(src)));
+    const unknown = await run('op-010-x', 'nope');
+    assert.equal(unknown.status, 400);
+    assert.match((await unknown.json()).error, /não cadastrado/);
+    for (const id of ['broken', 'evil']) assert.equal((await run('op-013-' + id, id)).status, 400, id);
+    // First run: the folder becomes a clone of the repository, with pushes blocked.
+    const res = await run('op-010-billing', 'billing', 'mapear GITCHECK');
+    assert.equal(res.status, 201, await res.clone().text());
+    const { runId, args } = await res.json();
+    const dir = path.join(projectsRoot, 'op-010-billing');
+    assert.ok(existsSync(path.join(dir, 'README.md')));
+    assert.ok(args[args.indexOf('--disallowedTools') + 1].split(',').includes('Bash(git push:*)'));
+    const init = (await collect(runId)).find(e => e.type === 'system' && e.subtype === 'init');
+    assert.equal(path.resolve(init.gitTop).toLowerCase(), realpathSync.native(dir).toLowerCase());
+    // Later runs reuse the clone: the agents' work stays.
+    writeFileSync(path.join(dir, 'notes.md'), 'x');
+    assert.equal((await run('op-010-billing', 'billing')).status, 201);
+    assert.ok(existsSync(path.join(dir, 'notes.md')));
+    // A folder that already holds work is not taken over; the empty repository of an earlier git init gives way.
+    const used = path.join(projectsRoot, 'op-011-used');
+    mkdirSync(used); writeFileSync(path.join(used, 'a.txt'), 'x');
+    const busy = await run('op-011-used', 'billing');
+    assert.equal(busy.status, 400);
+    assert.match((await busy.json()).error, /já tem arquivos/);
+    const early = path.join(projectsRoot, 'op-012-early');
+    execFileSync('git', ['init', '-q', early], { stdio: 'ignore' });
+    assert.equal((await run('op-012-early', 'billing')).status, 201);
+    assert.ok(existsSync(path.join(early, 'README.md')));
+    // Without a project folder the link is refused.
+    const loose = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, repo: 'billing' } }) });
+    assert.equal(loose.status, 400);
+  } finally { rmSync(reposFile, { force: true }); }
+});

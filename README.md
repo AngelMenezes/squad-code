@@ -249,6 +249,7 @@ A lista completa está no [guia](docs/GUIA.md#-controles).
 | `SQUAD_CLAUDE_BIN` | `claude` | Executável do Claude Code (nome no `PATH` ou caminho completo) |
 | `SQUAD_PROJECTS_DIR` | `./projects` | Raiz das pastas de trabalho dos agentes |
 | `SQUAD_DATA_DIR` | `./data` | Pasta do banco SQLite (`squad.db`) |
+| `SQUAD_REPOS` | `./data/repos.json` | Lista de repositórios existentes que uma operação pode vincular |
 
 Exemplos:
 
@@ -289,6 +290,33 @@ no modo headless ninguém aprova, então são recusadas. Duas configurações ab
 (`permissions.blockReadsOutsideWorkingDirectories`), então os agentes não confundem o projeto com o código do SQUAD/CODE
 nem com outras pastas suas. Comandos de terminal (`Bash`), quando liberados para um agente, não são isolados pelo Claude
 Code no Windows; nesse caso vale a instrução do prompt.
+
+### Trabalhar em um projeto que já existe
+
+Uma operação pode partir de um repositório existente em vez de uma pasta vazia. Liste os repositórios em
+`data/repos.json` (o bridge só lê o arquivo, e as mudanças valem sem reiniciar):
+
+```json
+{
+  "repos": [
+    { "id": "faturamento", "name": "Faturamento", "path": "C:/code/faturamento", "baseBranch": "main" },
+    { "id": "portal", "name": "Portal", "url": "https://github.com/empresa/portal.git", "baseBranch": "develop" }
+  ]
+}
+```
+
+No briefing da operação, escolha o repositório em **REPOSITÓRIO EXISTENTE**. Então:
+
+- Na primeira execução a pasta da operação vira um **clone** do repositório (`git clone`). Os agentes nunca mexem na
+  sua cópia de trabalho, e `git push` fica bloqueado: os envios ficam com você.
+- A F00 deixa de ser o setup e vira **Reconhecimento do projeto**. Ela mapeia o código em `docs/squad/` (mapa,
+  arquitetura, convenções, comandos e o commit de referência em `.reconhecimento`) na branch `squad/reconhecimento`, e
+  preenche os campos ainda vazios da documentação do projeto (visão, escopo, glossário, arquitetura e ADRs).
+- Até a documentação ficar completa, a execução roda só a F00, que precisa apenas de nome, briefing e squad. Depois
+  disso, as features seguintes leem `docs/squad/` em vez de varrer o código a cada execução.
+
+O vínculo só pode ser escolhido enquanto a operação ainda não tem nenhuma entrega, e a página nunca recebe o caminho
+ou a URL do repositório, só o `id` e o nome.
 
 ### Dados do workspace
 

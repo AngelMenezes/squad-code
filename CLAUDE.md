@@ -62,7 +62,11 @@ first run. Because Claude Code loads CLAUDE.md from every folder above the cwd, 
 own git repository (`ensureProjectRepo`: `git init` before a run when `.git` is missing; skipped without git) and project runs get
 `GIT_CEILING_DIRECTORIES` = PROJECTS_DIR (`gitCeiling`), so Claude Code (git status, `.claude/settings.json` from the repo root outside
 Windows) and the agents' git commands never reach the enclosing repository (this app's clone). The same settings file sets
-`permissions.blockReadsOutsideWorkingDirectories`, so the file tools refuse reads outside the folder (and `--add-dir`). An explicit `cwd` stays as a fallback
+`permissions.blockReadsOutsideWorkingDirectories`, so the file tools refuse reads outside the folder (and `--add-dir`). Linked operations: the `repo` option (an id of `REPOS_FILE` = `SQUAD_REPOS` or `data/repos.json`, `loadRepos`, read on every
+use, never written; entries `{id, name, path | url, baseBranch}`) makes `ensureProjectClone` replace the `git init`: an empty folder
+(or one holding only the empty repository of an earlier `git init`) gets `git clone [--branch]`, a clone of the same origin is reused,
+anything else is refused; such runs get `Bash(git push:*)` in `disallowedTools`. `/api/health` sends `repos` (`publicRepos`: ids,
+names, branches, errors; never the path or URL). An explicit `cwd` stays as a fallback
 (tests, direct API use); a run with neither `project` nor `cwd` is refused (never `process.cwd()`, the app folder). The step prompt
 (`buildStepPrompt`) and `CALLED_AGENT_SYSTEM` tell agents to keep every file inside the folder. The settings.json project/local scopes
 take `project=` as well.
@@ -234,6 +238,14 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   runs before it is approved. It runs in `createOperation`, `saveProject`, `saveFeature` and `normalizeWorkspace` (older workspaces
   get it in backlog; the boot then writes the database at once, `diskSync.migrated`). It cannot be deleted, dragged or moved to another
   sprint; the editor locks its sprint and shows it as a fixed dependency of new features (`featureDraftFor`). The seed's F00 is done.
+- Existing repository: `project.repoId` (persisted; chosen in the briefing's REPOSITÓRIO EXISTENTE, `repoFieldHTML`, from
+  `ui.bridge.repos`; fixed once a feature has an output, `repoLocked`) goes to the bridge as `repo` in `runOptionsFor`. Its F00 is
+  **Reconhecimento do projeto** (`RECON_FEATURE`, `setupDef`; `ensureSetup` swaps an untouched F00 both ways; `isRecon`,
+  `RECON_BRIEF`): the agents map the code into `docs/squad/` (with `.reconhecimento`, the base commit) on branch
+  `squad/reconhecimento`, and a ```json `{"docs":{...}}` block at the end of a step fills the project fields still empty
+  (`applyReconDocs`, ADRs only when there are none). `runGate(p, f)`: while that F00 is pending and the documentation is incomplete
+  (`reconOnly`), runs take F00 alone and need only name, briefing and squad (`reconGaps`); `startRun`, `openSpawn`/`spawnAgent` and the
+  commander chat follow it. Later steps of a linked operation are told to read `docs/squad` before exploring (`buildStepPrompt`).
 - **Exportar** (operation header) → `exportProject`/`projectExportFiles`: a store-only `.zip` (`zipFiles`) with
   `CLAUDE.md`, `docs/{project,architecture,standards,features/<NNN-slug>}` and `.claude/{agents,commands,settings.json}`.
   `docs/standards` is compiled from the squad's DIRETRIZES (`STANDARD_FILES`); simulated-only progress exports as
