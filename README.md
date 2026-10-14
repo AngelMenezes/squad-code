@@ -359,7 +359,15 @@ cada etapa inclui só os arquivos dela.
 Escolha o repositório ao criar a operação (**Nova operação > Repositório existente**) ou depois, no briefing, em
 **REPOSITÓRIO EXISTENTE**, e escolha também o **reconhecimento**:
 
-- **Com reconhecimento:** a F00 mapeia o código em `docs/squad/` antes das features (detalhes abaixo).
+- **Usar o mapa da equipe** (só aparece quando o `docs/squad/` já está na branch base, e já vem marcado): o reconhecimento
+  que outro desenvolvedor fez e mergeou serve a esta operação. Não há F00 e ninguém gasta tokens mapeando de novo: as
+  etapas leem o `docs/squad/`, e a documentação do projeto (visão, escopo, glossário, arquitetura e ADRs) vem de
+  `docs/squad/projeto.json`, sem chamar o modelo. Como no modo direto, a execução precisa só de nome, briefing e squad.
+  Se o mapa ficar desatualizado, **Atualizar mapa** corrige só o que mudou. **Refazer o reconhecimento completo** fica
+  como última opção, discreta, para quem quiser mapear tudo de novo.
+- **Com reconhecimento:** a F00 mapeia o código em `docs/squad/` antes das features (detalhes abaixo). Depois do merge, o
+  mapa serve a toda a equipe. Se a origem já tiver uma branch de reconhecimento (`squad/f00-*`) ainda sem merge, o
+  assistente avisa: peça o merge dela em vez de mapear de novo.
 - **Direto ao trabalho:** sem F00, para um fix ou um ajuste pontual. A execução precisa só de nome, briefing e squad, e
   cada etapa lê apenas o que a tarefa pede (README, manifestos e os arquivos citados), sem varrer o repositório. O aviso
   **Sem reconhecimento** na página da operação oferece **Fazer reconhecimento** a qualquer momento: a F00 volta, e as
@@ -405,6 +413,10 @@ Então:
   glossário, arquitetura e ADRs). Nas features de mapa (a F00 e as atualizações do mapa), os agentes só podem escrever
   em `docs/squad/`, mesmo os que não têm a ferramenta Write no perfil, e o bridge grava o commit de referência em
   `docs/squad/.reconhecimento`.
+- Ao **aprovar** uma feature de mapa (a F00 ou uma atualização do mapa), o bridge grava a documentação do projeto como você
+  a revisou em `docs/squad/projeto.json`, na branch dela. Ela chega à equipe com o merge, junto com o mapa. Uma operação
+  com reconhecimento que ainda não começou a F00 (ou uma de trabalho direto) oferece **Usar o mapa da equipe** assim que o
+  mapa aparece na branch base.
 - **Padrão de código da operação** (no briefing), uma escolha sua por operação:
   - **Seguir o padrão do repositório:** as convenções aprovadas pelo time (`docs/squad/convencoes.md` na branch base,
     ou seja, depois do merge da F00) prevalecem sobre as diretrizes dos agentes. Das diretrizes, vale só o que não

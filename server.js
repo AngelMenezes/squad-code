@@ -424,6 +424,53 @@ async function mapForPlan(root, repo) {
   return `\n\n## Mapa do repositório (docs/squad/mapa.md)\n${text.length > 20000 ? text.slice(0, 20000) + '\n[...]' : text}${mapPromptNote(m)}`;
 }
 
+/* Team map. Once a reconnaissance is merged, docs/squad (and docs/squad/projeto.json, the reviewed project documentation written when
+ * a map feature is approved) is on the base branch for every developer: a new operation over that repository reuses it instead of
+ * paying for another reconnaissance. Read before any operation clone exists: a local repository is read in place (the ref its clones
+ * start from), a URL through a shallow blobless bare clone in PROJECTS_DIR/.cache/<id>.git, refreshed at most every TEAM_TTL. pending =
+ * reconnaissance branches (squad/f00-*) already on the origin, i.e. someone mapping it whose merge has not happened. */
+const TEAM_DOCS_FILE = 'docs/squad/projeto.json';
+const TEAM_TTL = 60 * 1000;
+const teamMaps = new Map();
+const TEAM_FIELDS = [['vision', 8000], ['scopeIn', 8000], ['scopeOut', 8000], ['glossary', 8000], ['architecture', 12000]];
+/** The project documentation kept in projeto.json: known fields only, cut to the app's limits; null when there is nothing. */
+function cleanTeamDocs(d) {
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+  const s = (v, n) => typeof v === 'string' ? v.trim().slice(0, n) : '', out = {};
+  for (const [k, n] of TEAM_FIELDS) { const v = s(d[k], n); if (v) out[k] = v; }
+  const adrs = (Array.isArray(d.adrs) ? d.adrs : []).filter(x => x && typeof x === 'object').map(x => ({ title: s(x.title, 120), status: s(x.status, 20), date: s(x.date, 10), content: s(x.content, 12000) })).filter(x => x.title && x.content).slice(0, 50);
+  if (adrs.length) out.adrs = adrs;
+  return Object.keys(out).length ? out : null;
+}
+const teamLookups = new Map();
+function teamMapInfo(repo, refresh = false) {
+  const hit = teamMaps.get(repo.id);
+  if (!refresh && hit && hit.source === repo.source && Date.now() - hit.at < TEAM_TTL) return Promise.resolve(hit.value);
+  // One lookup per repository at a time: a second request waits for it instead of removing the cache it is using.
+  if (!teamLookups.has(repo.id)) teamLookups.set(repo.id, readTeamMap(repo).finally(() => teamLookups.delete(repo.id)));
+  return teamLookups.get(repo.id);
+}
+async function readTeamMap(repo) {
+  let cwd = repo.source, ref = repo.baseBranch ? `refs/heads/${repo.baseBranch}` : 'HEAD';
+  if (repo.url) {
+    cwd = path.join(longPath(PROJECTS_DIR), '.cache', `${repo.id}.git`);
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(cwd), { recursive: true });
+    try { await gitRun(['clone', '-q', '--bare', '--depth', '1', '--filter=blob:none', '--single-branch', ...(repo.baseBranch ? ['--branch', repo.baseBranch] : []), '--', repo.url, cwd], PROJECTS_DIR, 300000); }
+    catch (e) { throw new Error(e.code === 'ENOENT' ? 'Git não encontrado.' : `Não foi possível consultar ${repo.id}: ${e.message}`); }
+    ref = 'HEAD';
+  }
+  const show = p => gitRun(['show', `${ref}:${repoPath(repo, p)}`], cwd, 60000).catch(() => '');
+  const mark = await show(MAP_FILE), map = !!mark || await gitOk(['cat-file', '-e', `${ref}:${repoPath(repo, 'docs/squad/mapa.md')}`], cwd);
+  let docs = null;
+  if (map) { try { docs = cleanTeamDocs(JSON.parse(await show(TEAM_DOCS_FILE) || 'null')); } catch {} }
+  const pending = map ? [] : (await gitRun(['ls-remote', '--heads', '--', repo.source], PROJECTS_DIR, 30000).catch(() => '')).split('\n')
+    .map(l => (l.split('\t')[1] || '').replace(/^refs\/heads\//, '')).filter(b => /^squad\/f00-[a-z0-9-]+$/.test(b)).slice(0, 10);
+  const value = { map, commit: (mark.match(/\b[0-9a-f]{7,40}\b/) || [])[0]?.slice(0, 12) || null, date: (mark.match(/\d{4}-\d{2}-\d{2}/) || [])[0] || null, docs, pending, baseBranch: repo.baseBranch || '' };
+  teamMaps.set(repo.id, { at: Date.now(), source: repo.source, value });
+  return value;
+}
+
 /* Merges. A linked operation's approved feature waits for its branch to reach the base branch before its dependents run. Merged =
  * the branch is in the base's history (merge commit, fast-forward) or, after a squash or rebase merge, every file the branch changed
  * is identical on the base. 'empty' = the branch has no commits since it started (startMark), so there is nothing to merge. */
@@ -476,6 +523,24 @@ async function commitStep(run) {
     await gitRun([...(who ? [] : ['-c', 'user.name=SQUAD/CODE', '-c', 'user.email=squad-code@localhost']), 'commit', '-q', '-m', `SQUAD/CODE: ${c.label || c.slug}`], c.dir, 120000);
     pushEvent(run, { type: 'bridge', subtype: 'commit', commit: await gitRun(['rev-parse', '--short', 'HEAD'], c.dir), files: files.slice(0, 60), total: files.length });
   } catch (e) { pushEvent(run, { type: 'bridge', subtype: 'commit', commit: null, error: e.message }); }
+}
+
+/** POST /api/team-docs: when the person approves a map feature (reconnaissance or map update), the project documentation as reviewed
+ * in the app goes to docs/squad/projeto.json on that feature's branch, so it reaches the base with the map and other developers import
+ * it (teamMapInfo) instead of running their own reconnaissance. Committed only when it changed. */
+async function writeTeamDocs(root, repo, slug, docs) {
+  const dir = path.join(root, WT_DIR, slug), at = path.join(dir, ...subdirParts(repo));
+  if (!fs.existsSync(path.join(dir, '.git'))) throw Object.assign(new Error(`O worktree ${slug} não existe mais: a documentação não foi gravada no mapa.`), { status: 409 });
+  if (!fs.existsSync(path.join(at, 'docs', 'squad'))) throw Object.assign(new Error('Esta branch não tem docs/squad: a documentação não foi gravada no mapa.'), { status: 409 });
+  const file = path.join(at, ...TEAM_DOCS_FILE.split('/')), rel = repoPath(repo, TEAM_DOCS_FILE);
+  let cur = null; try { cur = cleanTeamDocs(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
+  if (JSON.stringify(cur) === JSON.stringify(docs)) return { commit: null, file: rel };
+  fs.writeFileSync(file, JSON.stringify({ versao: 1, atualizado: new Date().toISOString(), ...docs }, null, 2) + '\n', 'utf8');
+  await gitRun(['add', '--', rel], dir, 60000);
+  if (await gitOk(['diff', '--cached', '--quiet'], dir)) return { commit: null, file: rel };
+  const who = await gitRun(['config', 'user.email'], dir).catch(() => '');
+  await gitRun([...(who ? [] : ['-c', 'user.name=SQUAD/CODE', '-c', 'user.email=squad-code@localhost']), 'commit', '-q', '-m', 'SQUAD/CODE: documentação do projeto para a equipe', '--', rel], dir, 120000);
+  return { commit: await gitRun(['rev-parse', '--short', 'HEAD'], dir), file: rel };
 }
 
 /* The operation's code standard (conventions option, feature steps of a linked operation), always the person's choice:
@@ -1007,6 +1072,25 @@ async function handle(req, res) {
     if (url.pathname === '/api/toolchains' && req.method === 'GET') return json(res, 200, { ok: true, ...await toolchains(url.searchParams.get('refresh') === '1') });
     // Repository registry (Configurações > Repositórios): GET /api/repos, PUT|DELETE /api/repos/<id>.
     if (parts[1] === 'repos' && parts.length === 2 && req.method === 'GET') return json(res, 200, { ok: true, ...reposListing() });
+    // Team map of a registered repository (no operation clone needed): GET /api/repos/<id>/map[?refresh=1].
+    if (parts[1] === 'repos' && parts[3] === 'map' && parts.length === 4 && req.method === 'GET') {
+      const repo = loadRepos().repos.find(r => r.id === parts[2]);
+      if (!repo) return fail(res, 404, 'Repositório não cadastrado.');
+      if (repo.error) return fail(res, 400, `Repositório ${repo.id}: ${repo.error}`);
+      return json(res, 200, { ok: true, ...await teamMapInfo(repo, url.searchParams.get('refresh') === '1') });
+    }
+    // POST /api/team-docs/<folder> {repo, feature, docs}: the approved map feature's documentation into docs/squad/projeto.json.
+    if (parts[1] === 'team-docs' && req.method === 'POST' && parts.length === 3) {
+      const body = await readBody(req), repo = loadRepos().repos.find(r => r.id === body.repo);
+      if (!repo) return fail(res, 400, 'Repositório não cadastrado.');
+      const slug = String(body.feature || '');
+      if (!FOLDER_RE.test(slug)) return fail(res, 400, 'Feature inválida.');
+      const docs = cleanTeamDocs(body.docs);
+      if (!docs) return fail(res, 400, 'Nenhuma documentação para gravar.');
+      const root = projectDir(parts[2]);
+      try { const r = await writeTeamDocs(root, repo, slug, docs); teamMaps.delete(repo.id); return json(res, 200, { ok: true, ...r }); }
+      catch (e) { return fail(res, e.status || 500, e.message); }
+    }
     if (parts[1] === 'repos' && parts.length === 3 && (req.method === 'PUT' || req.method === 'DELETE')) {
       const id = decodeURIComponent(parts[2]);
       if (req.method === 'PUT') { const created = saveRepoEntry(id, await readBody(req)); return json(res, created ? 201 : 200, { ok: true, created, ...reposListing() }); }

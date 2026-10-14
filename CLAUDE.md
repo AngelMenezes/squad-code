@@ -85,7 +85,13 @@ command once (`prepareWorktree`, marker in `.git/squad-prepared-<feature>`, 15 m
 `docs/squad/.reconhecimento` (or, if it left the history, the last base commit before the date there) against `origin/<baseBranch>`,
 outside `docs/squad`: 'fresh', 'changed', 'stale' (`STRUCTURAL_RE` paths, top-level folders added/removed, or > `MAP_SMALL`
 files), 'unknown', 'missing'. Feature steps get a `bridge`/`map` event and, unless fresh/missing, the changed files appended to
-their prompt (`mapPromptNote` → `run.promptExtra`); `GET /api/map/:folder?repo=<id>[&fetch=1]` answers the same for the page.
+their prompt (`mapPromptNote` → `run.promptExtra`); `GET /api/map/:folder?repo=<id>[&fetch=1]` answers the same for the page. **Team map:** `GET /api/repos/:id/map[?refresh=1]`
+(`teamMapInfo`, no operation clone needed, cached `TEAM_TTL`, one lookup per repository at a time) reads the base branch of a
+registered repository (a local one in place, at the ref its clones start from; a URL through a shallow blobless bare clone in
+`PROJECTS_DIR/.cache/<id>.git`): `map` (`.reconhecimento` or `mapa.md` there), `commit`, `date`, `docs` (`docs/squad/projeto.json`
+through `cleanTeamDocs`: vision, scopeIn, scopeOut, glossary, architecture, complete ADRs) and, without a map, `pending` (`squad/f00-*`
+branches on the origin, from `ls-remote`). `POST /api/team-docs/:folder {repo, feature, docs}` (`writeTeamDocs`) writes `projeto.json`
+into that feature's worktree and commits it only when it changed (409 without the worktree or `docs/squad`).
 With `&branches=squad/a,...` it also answers `merges` (`mergeState`: merged by history, or by content after a squash/rebase when
 some base commit since the fork point (newest 60 touching those files) had every file the branch changed exactly as the branch has
 it, so later changes to them do not hide the merge; `empty` when the branch has no commits since `startMark`, written at worktree
@@ -297,7 +303,17 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   `ui.bridge.repos`; fixed once a feature has an output, `repoLocked`) goes to the bridge as `repo` in `runOptionsFor`. Repositories are
   registered in Configurações > Repositórios (tab `repos`: `loadRepoList`, `renderRepoPane`, `#repoForm` → `saveRepo`, `repoDelete` with
   a second click to confirm; the identifier field is named `key`, since a control named `id` would shadow `form.id` in the submit router).
-  `project.reconMode` (persisted, 'map' | 'direct', RECONHECIMENTO in the briefing, `.if-linked`, locked like the repository):
+  `project.reconMode` (persisted, 'map' | 'direct' | 'team', RECONHECIMENTO in the briefing, `.if-linked`, locked like the repository):
+  `teamMode(p)` = linked + 'team' (the team's map, docs/squad from another developer's merged reconnaissance, is on the base branch):
+  no F00 and no tokens spent mapping again; `skipRecon` (direct or team) drives `ensureSetup`, `runGaps` and `runGate`, and team steps
+  get the regular "read docs/squad" section of `buildStepPrompt`. `ui.teamMaps[repoId]` (transient, `loadTeamMap`: renders ask once,
+  the wizard after a minute, "Verificar" refreshes the bridge) feeds the wizard (`opNewReconHTML` in `#opNewRecon`: with a map,
+  "Usar o mapa da equipe" is preselected and "Refazer o reconhecimento completo" is a quiet `.op-recon-redo` line; without one, a
+  warning lists the pending reconnaissance branches; `ui.opNew.reconMode` holds only an explicit pick, a change of repository resets
+  it), the briefing select (`reconOptionsHTML`/`reconHint`, patched in place by `projectReconRefresh`) and `mapNoticeHTML` ("Usar o
+  mapa da equipe" → `useTeamMap` for an untouched recon F00 or direct work). Choosing it imports `projeto.json` into the empty fields
+  (`applyTeamDocs`, ADRs only when there are none); approving a map feature (recon F00 or `mapUpdate`) first sends the reviewed
+  documentation (`sendTeamDocs` → `/api/team-docs`, `teamDocsOf`) and then removes the worktree, so it reaches the base with the map.
   `directMode(p)` = linked + 'direct' (e.g. a fix): `ensureSetup` drops an untouched F00 (and unblocks what only waited for it) and
   creates none, runs need only `reconGaps` (`runGaps`, used by `runGate`, the features head and the commander chat), the steps get the
   "sem reconhecimento" section of `buildStepPrompt`, and `mapNoticeHTML` offers **Fazer reconhecimento** (`startRecon`: back to 'map',

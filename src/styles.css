@@ -1639,6 +1639,12 @@ body:not(.reduce-motion) .at-tile.leaving,.at-tile.leaving{animation:at-leave .4
 .op-code-sub{display:none;padding:2px 0 6px 28px}
 .op-code:has(input[name=kind][value=new]:checked) .op-code-sub[data-for=new],.op-code:has(input[name=kind][value=existing]:checked) .op-code-sub[data-for=existing]{display:grid;gap:10px}
 .op-code-recon{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.op-code-recon .op-recon-redo,.op-code-recon .op-recon-note{grid-column:1/-1}
+.op-recon-redo{display:flex;align-items:center;gap:7px;font-size:10px;color:#6f838c;cursor:pointer;padding:2px 2px 0}
+.op-recon-redo input{accent-color:#7c98a9;margin:0}
+.op-recon-redo:hover,.op-recon-redo:has(input:checked){color:#a9b8bf}
+.op-recon-note{font-size:10px;line-height:1.6;color:#82949c;padding:2px}
+.op-recon-note.warning{color:#c5b995;border-left:2px solid #8f7e4e;padding:6px 10px;background:#24200f33}
 @media(max-width:560px){.op-code-recon{grid-template-columns:1fr}.op-code-sub{padding-left:0}}
 /* Briefing: reconhecimento e padrão de código só com repositório vinculado; o remoto só em projeto novo (segue o select, antes de salvar). */
 #projectForm:has(#projectRepo option[value=""]:checked) .if-linked{display:none}

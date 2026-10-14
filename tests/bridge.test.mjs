@@ -920,6 +920,56 @@ test('the bridge commits each linked step and writes .reconhecimento itself; the
   } finally { rmSync(reposFile, { force: true }); }
 });
 
+test('team map: found on the base branch without a clone, its documentation goes to projeto.json on approval, a reconnaissance on the origin is pending', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main');
+  writeFileSync(path.join(src, 'app.py'), 'print(1)\n');
+  gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'init');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'equipe', path: src, baseBranch: 'main' }] }));
+  const folder = 'op-090-equipe', map = async (q = '?refresh=1') => (await api(`/api/repos/equipe/map${q}`)).json();
+  const docsPost = body => api(`/api/team-docs/${folder}`, { method: 'POST', body: JSON.stringify({ repo: 'equipe', feature: 'f00-cccccc', ...body }) });
+  try {
+    assert.equal((await api('/api/repos/nope/map')).status, 404);
+    let m = await map('');
+    assert.equal(m.map, false);
+    assert.deepEqual(m.pending, []);
+    // The reconnaissance writes the map; approval sends the reviewed documentation (known fields only, ADRs complete).
+    const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'mapear WRITE:docs/squad/mapa.md', options: { project: folder, repo: 'equipe', feature: 'f00-cccccc', mapRef: true } }) });
+    assert.equal(res.status, 201, await res.clone().text());
+    assert.equal((await collect((await res.json()).runId)).at(-1).status, 'done');
+    const docs = { vision: 'Visão do faturamento', architecture: 'Monólito Python', adrs: [{ title: 'Usar Python', status: 'Aceito', date: '2026-01-02', content: 'Já é o código.' }, { title: 'Sem conteúdo', content: '' }], briefing: 'fica de fora' };
+    const sent = await docsPost({ docs });
+    assert.equal(sent.status, 200, await sent.clone().text());
+    const { commit, file } = await sent.json();
+    assert.ok(commit);
+    assert.equal(file, 'docs/squad/projeto.json');
+    const root = path.join(projectsRoot, folder), saved = JSON.parse(gitIn(root, 'show', 'squad/f00-cccccc:docs/squad/projeto.json'));
+    assert.equal(saved.vision, 'Visão do faturamento');
+    assert.equal(saved.adrs.length, 1);
+    assert.equal(saved.briefing, undefined);
+    assert.equal((await (await docsPost({ docs })).json()).commit, null); // unchanged: no new commit
+    assert.equal((await docsPost({ docs: { briefing: 'x' } })).status, 400);
+    assert.equal((await docsPost({ docs, feature: 'Bad' })).status, 400);
+    assert.equal((await docsPost({ docs, feature: 'f09-zzzzzz' })).status, 409);
+    // Sent but not merged: someone is mapping it, no map yet.
+    const push = await api(`/api/branches/${folder}/push`, { method: 'POST', body: JSON.stringify({ repo: 'equipe', branch: 'squad/f00-cccccc' }) });
+    assert.equal(push.status, 200, await push.clone().text());
+    m = await map();
+    assert.equal(m.map, false);
+    assert.deepEqual(m.pending, ['squad/f00-cccccc']);
+    // Merged: the next operation finds the map and the documentation, and nothing is pending.
+    gitIn(src, 'merge', '-q', 'squad/f00-cccccc');
+    m = await map();
+    assert.equal(m.map, true);
+    assert.match(m.commit, /^[0-9a-f]{12}$/);
+    assert.deepEqual(m.docs, { vision: 'Visão do faturamento', architecture: 'Monólito Python', adrs: [docs.adrs[0]] });
+    assert.deepEqual(m.pending, []);
+  } finally { rmSync(reposFile, { force: true }); }
+});
+
 test('the repository registry is edited from the page: a folder inside a repository becomes a subfolder, URLs never carry credentials', async t => {
   try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
   const src = tmp('squad-src-'); extraDirs.push(src);
