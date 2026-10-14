@@ -694,3 +694,60 @@ test('a linked run answers at once and prepares as its own phase: live output, c
     assert.ok(retry.some(e => e.subtype === 'prepare' && e.step === 'prepare'));
   } finally { rmSync(reposFile, { force: true }); }
 });
+
+test('map freshness comes from git: fresh, changed (list in the prompt), stale on structure, date fallback, missing', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  let env = process.env;
+  const git = (...a) => execFileSync('git', ['-C', src, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env }).trim();
+  const commit = (file, text, msg) => { mkdirSync(path.dirname(path.join(src, file)), { recursive: true }); writeFileSync(path.join(src, file), text); git('add', '.'); git('commit', '-q', '-m', msg); };
+  git('init', '-q'); git('checkout', '-q', '-b', 'main');
+  // The base commit is older than the rest, as when the map is written later (the date fallback has one-second precision).
+  env = { ...process.env, GIT_AUTHOR_DATE: '2026-01-05T10:00:00Z', GIT_COMMITTER_DATE: '2026-01-05T10:00:00Z' };
+  commit('src/a.js', 'a\n', 'init');
+  env = process.env;
+  // The map, merged on the base branch, describes the commit before it.
+  const base = git('rev-parse', 'HEAD'), at = git('log', '-1', '--format=%cI');
+  commit('docs/squad/mapa.md', '# Mapa\n', 'mapa');
+  commit('docs/squad/.reconhecimento', `${base}\n${at}\n`, 'referência');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'maps', path: src, baseBranch: 'main' }, { id: 'nomap', path: src, baseBranch: 'nomap' }] }));
+  const folder = 'op-040-maps';
+  const step = async feature => {
+    const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'tarefa', options: { project: folder, repo: 'maps', feature } }) });
+    assert.equal(res.status, 201, await res.clone().text());
+    const events = await collect((await res.json()).runId);
+    return { map: events.find(e => e.subtype === 'map'), prompt: events.at(-1).result };
+  };
+  const check = async (fetch = true, repo = 'maps', dir = folder) => (await api(`/api/map/${dir}?repo=${repo}${fetch ? '&fetch=1' : ''}`)).json();
+  try {
+    assert.equal((await check(false, 'maps', 'op-041-none')).status, 'no-clone');
+    assert.equal((await api(`/api/map/${folder}?repo=nope`)).status, 400);
+    // Only docs/squad changed since the map: fresh, and the step prompt gets nothing extra.
+    const fresh = await step('f01-aaaaaa');
+    assert.equal(fresh.map.status, 'fresh');
+    assert.ok(!fresh.prompt.includes('Mudanças no repositório'));
+    // A small change on the base branch: the next feature's prompt lists it.
+    commit('src/a.js', 'b\n', 'muda a');
+    const changed = await step('f02-bbbbbb');
+    assert.equal(changed.map.status, 'changed');
+    assert.deepEqual(changed.map.files, ['M src/a.js']);
+    assert.match(changed.prompt, /## Mudanças no repositório desde o mapa[\s\S]*M src\/a\.js/);
+    // A manifest and a new top-level folder are structural: stale.
+    commit('package.json', '{}\n', 'manifesto'); commit('infra/main.tf', '\n', 'infra');
+    const stale = await check();
+    assert.equal(stale.fetched, true);
+    assert.equal(stale.status, 'stale');
+    assert.ok(stale.structural.includes('package.json') && stale.structural.includes('+ infra'), JSON.stringify(stale.structural));
+    // The recorded commit left the history: the map's date finds the base commit it described.
+    commit('docs/squad/.reconhecimento', `0123456789abcdef0123456789abcdef01234567\n${at}\n`, 'referência perdida');
+    const byDate = await check();
+    assert.equal(byDate.fallback, true);
+    assert.equal(byDate.ref, base.slice(0, 12));
+    // A base branch without the map.
+    git('checkout', '-q', '--orphan', 'nomap'); git('rm', '-rq', '--cached', '.'); git('clean', '-fdq'); commit('x.txt', 'x\n', 'sem mapa');
+    const other = 'op-042-nomap';
+    await collect((await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: other, repo: 'nomap' } }) })).json()).runId);
+    assert.equal((await check(false, 'nomap', other)).status, 'missing');
+  } finally { rmSync(reposFile, { force: true }); }
+});

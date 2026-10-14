@@ -284,6 +284,39 @@ async function removeWorktree(root, slug) {
   return { removed: true, branch: `squad/${slug}` };
 }
 
+/* Map freshness. docs/squad/.reconhecimento holds the base commit the map describes (and its date); what changed on the base branch
+ * since then, outside docs/squad, comes from git, never from the model. A commit that left the history (rewritten base) falls back
+ * to the last base commit before the map's date. 'fresh' = nothing changed, 'changed' = a few files (steps get the list), 'stale' =
+ * structural changes (manifests, migrations, CI, top-level folders) or more than MAP_SMALL files: time to update the map. */
+const MAP_FILE = 'docs/squad/.reconhecimento';
+const MAP_SMALL = 30;
+const STRUCTURAL_RE = /(^|\/)(package\.json|pnpm-workspace\.yaml|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|go\.mod|Cargo\.toml|requirements[^/]*\.txt|pyproject\.toml|Gemfile|composer\.json|[^/]+\.csproj|[^/]+\.sln|Dockerfile|docker-compose[^/]*\.ya?ml)$|(^|\/)migrations?\/|^\.github\/workflows\//i;
+const baseRef = repo => repo.baseBranch ? `origin/${repo.baseBranch}` : 'origin/HEAD';
+async function mapStatus(cwd, target) {
+  let text = '';
+  try { text = await gitRun(['show', `${target}:${MAP_FILE}`], cwd); } catch { return { status: 'missing', target }; }
+  const commit = (text.match(/\b[0-9a-f]{7,40}\b/) || [])[0] || null, date = (text.match(/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?/) || [])[0] || null;
+  let ref = null, fallback = false;
+  if (commit && await gitOk(['cat-file', '-e', `${commit}^{commit}`], cwd) && await gitOk(['merge-base', '--is-ancestor', commit, target], cwd)) ref = commit;
+  else if (date) { try { ref = await gitRun(['rev-list', '-1', `--before=${date}`, target], cwd) || null; fallback = !!ref; } catch {} }
+  if (!ref) return { status: 'unknown', target, commit, date };
+  const out = await gitRun(['diff', '--name-status', '--no-renames', ref, target, '--', '.', ':(exclude)docs/squad'], cwd, 30000);
+  const files = out ? out.split('\n').map(l => { const [s, ...p] = l.split('\t'); return { s: s.charAt(0), path: p.join('\t') }; }) : [];
+  const tops = async r => new Set((await gitRun(['ls-tree', '--name-only', r], cwd).catch(() => '')).split('\n').filter(Boolean));
+  const [before, after] = files.length ? await Promise.all([tops(ref), tops(target)]) : [new Set(), new Set()];
+  // Top-level folders that appeared or went away, seen through the changed files (docs/squad is out of the diff).
+  const top = f => f.path.split('/')[0];
+  const structural = [...new Set([...files.filter(f => STRUCTURAL_RE.test(f.path)).map(f => f.path), ...files.filter(f => f.s === 'A' && !before.has(top(f))).map(f => `+ ${top(f)}`), ...files.filter(f => f.s === 'D' && !after.has(top(f))).map(f => `- ${top(f)}`)])];
+  const status = !files.length ? 'fresh' : structural.length || files.length > MAP_SMALL ? 'stale' : 'changed';
+  return { status, target, commit, date, ref: ref.slice(0, 12), fallback, total: files.length, files: files.slice(0, 40).map(f => `${f.s} ${f.path}`), structural: structural.slice(0, 20) };
+}
+/** What a step gets about the map: nothing when it is fresh or missing, else the changed files since its commit. */
+function mapPromptNote(m) {
+  if (!['changed', 'stale', 'unknown'].includes(m?.status)) return '';
+  if (m.status === 'unknown') return '\n\n## Mapa do repositório sem referência\nNão foi possível achar o commit descrito em docs/squad/.reconhecimento na branch base. Confira a estrutura dos trechos do mapa que você usar antes de confiar neles.';
+  return `\n\n## Mudanças no repositório desde o mapa (docs/squad)\nO mapa descreve o commit ${m.ref}${m.date ? ` (${m.date})` : ''}${m.fallback ? ', achado pela data porque o commit registrado saiu do histórico' : ''}. Desde então, ${m.total} arquivo${m.total > 1 ? 's mudaram' : ' mudou'} fora de docs/squad (A = novo, M = alterado, D = removido):\n${m.files.join('\n')}${m.total > m.files.length ? `\n(e mais ${m.total - m.files.length})` : ''}\nLeia desses arquivos só os que importam para a sua tarefa; o resto do mapa continua valendo.${m.status === 'stale' ? `\nO mapa está desatualizado${m.structural.length ? ` (mudanças estruturais: ${m.structural.slice(0, 8).join(', ')})` : ''}: confira a estrutura dos trechos que você usar e registre no relatório o que o mapa precisa corrigir.` : ''}`;
+}
+
 /** Folder of a project under PROJECTS_DIR; the name is a plain slug, so it cannot leave the root. */
 function projectDir(name) {
   const folder = String(name || '').trim();
@@ -529,6 +562,14 @@ async function prepareRun(run, opts, prep) {
       prepared = r.text;
     }
     pushEvent(run, { type: 'bridge', subtype: 'worktree', feature: prep.feature, branch: wt.branch, created: wt.created, notes: wt.notes, prepare: prepared });
+    // What changed since the map, from git: on the base branch, or in the worktree while the map is not merged yet. The step's
+    // prompt gets the list, so the agent reads those files instead of scanning the repository.
+    try {
+      let m = await mapStatus(prep.root, baseRef(opts.repo));
+      if (m.status === 'missing') m = await mapStatus(wt.dir, 'HEAD');
+      pushEvent(run, { type: 'bridge', subtype: 'map', ...m });
+      run.promptExtra = mapPromptNote(m);
+    } catch (e) { pushEvent(run, { type: 'bridge', subtype: 'map', status: 'error', error: e.message }); }
     return true;
   } catch (e) {
     if (!run.cancelled) endRun(run, { isError: true, error: e.message });
@@ -574,7 +615,7 @@ function launchRun(run, resolved, args, opts, prompt) {
   });
 
   child.stdin.on('error', () => {});
-  child.stdin.end(prompt, 'utf8');
+  child.stdin.end(prompt + (run.promptExtra || ''), 'utf8');
 }
 
 /** Ends a run once: exit event, history, subscribers and temp files. Also for runs that end while preparing (error or cancel). */
@@ -708,6 +749,16 @@ async function handle(req, res) {
       const n = Number(body.concurrency);
       if (Number.isInteger(n) && n >= 1 && n <= 8) maxConcurrent = n;
       return json(res, 200, { ok: true, maxConcurrent });
+    }
+    // Map freshness of a linked operation: GET /api/map/<project folder>?repo=<id>[&fetch=1] ('no-clone' before its first run).
+    if (parts[1] === 'map' && req.method === 'GET' && parts.length === 3) {
+      const repo = loadRepos().repos.find(r => r.id === url.searchParams.get('repo'));
+      if (!repo) return fail(res, 400, 'Repositório não cadastrado.');
+      const root = projectDir(parts[2]);
+      if (!fs.existsSync(path.join(root, '.git'))) return json(res, 200, { ok: true, status: 'no-clone' });
+      const dir = longPath(root);
+      const fetched = url.searchParams.get('fetch') === '1' ? await gitRun(['fetch', '-q', 'origin'], dir, 300000).then(() => true, e => e.message) : null;
+      return json(res, 200, { ok: true, fetched, ...await mapStatus(dir, baseRef(repo)) });
     }
     // Approved feature of a linked operation: DELETE /api/worktrees/<project folder>/<feature>.
     if (parts[1] === 'worktrees' && req.method === 'DELETE' && parts.length === 4) {

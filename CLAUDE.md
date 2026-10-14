@@ -75,7 +75,11 @@ else the existing branch or a new one from the fetched `origin/<baseBranch>`, or
 `docs/squad/mapa.md` is not on the base; `.wt/` goes to the clone's `info/exclude`), whose new worktrees run the entry's `prepare`
 command once (`prepareWorktree`, marker in `.git/squad-prepared-<feature>`, 15 min); the clone's own CLAUDE.md files join
 `claudeMdExcludes`, and a `bridge`/`worktree` event reports branch, notes and prepare. `DELETE /api/worktrees/:folder/:feature`
-(`removeWorktree`, 409 with uncommitted work) removes it and keeps the branch. `/api/health` sends `repos` (`publicRepos`: ids,
+(`removeWorktree`, 409 with uncommitted work) removes it and keeps the branch. Map freshness (`mapStatus`, git only): the commit in
+`docs/squad/.reconhecimento` (or, if it left the history, the last base commit before the date there) against `origin/<baseBranch>`,
+outside `docs/squad`: 'fresh', 'changed', 'stale' (`STRUCTURAL_RE` paths, top-level folders added/removed, or > `MAP_SMALL`
+files), 'unknown', 'missing'. Feature steps get a `bridge`/`map` event and, unless fresh/missing, the changed files appended to
+their prompt (`mapPromptNote` → `run.promptExtra`); `GET /api/map/:folder?repo=<id>[&fetch=1]` answers the same for the page. `/api/health` sends `repos` (`publicRepos`: ids,
 names, branches, errors; never the path or URL). An explicit `cwd` stays as a fallback
 (tests, direct API use); a run with neither `project` nor `cwd` is refused (never `process.cwd()`, the app folder). The step prompt
 (`buildStepPrompt`) and `CALLED_AGENT_SYSTEM` tell agents to keep every file inside the folder. The settings.json project/local scopes
@@ -258,7 +262,11 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   Every step of a linked operation (`executeLiveStep`, spawn included) sends `feature: featureSlug(f)` (key + id tail, stable across
   renames) and `featureBase` (the F00's), so it runs in that feature's worktree; the room and the console show the `worktree` event
   and the preparing phase (`prepare` steps as the typing line, `PREP_TYPING`, and a note for the prepare command; `prepare-log` in the console),
-  and `approveFeature` asks the bridge to remove the worktree (the branch stays for the PR).
+  and `approveFeature` asks the bridge to remove the worktree (the branch stays for the PR). The operation page keeps the map state
+  in `ui.mapStatus` (transient; `mapCheck` from the features head render and "Verificar", and every step's `map` event against the
+  base) and shows `mapNoticeHTML`; **Atualizar mapa** (`createMapUpdate`) adds one feature with `mapUpdate: true` (persisted, scope
+  `architect`, `MAP_UPDATE_FEATURE`/`MAP_UPDATE_BRIEF`, its own section in `buildStepPrompt`) that rewrites only the affected parts
+  of `docs/squad` from the list the bridge appends.
 - **Exportar** (operation header) → `exportProject`/`projectExportFiles`: a store-only `.zip` (`zipFiles`) with
   `CLAUDE.md`, `docs/{project,architecture,standards,features/<NNN-slug>}` and `.claude/{agents,commands,settings.json}`.
   `docs/standards` is compiled from the squad's DIRETRIZES (`STANDARD_FILES`); simulated-only progress exports as

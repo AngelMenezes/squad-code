@@ -326,6 +326,19 @@ No briefing da operação, escolha o repositório em **REPOSITÓRIO EXISTENTE**.
 - Até a documentação ficar completa, a execução roda só a F00, que precisa apenas de nome, briefing e squad. Depois
   disso, as features seguintes leem `docs/squad/` em vez de varrer o código a cada execução.
 
+**Mapa em dia sem varrer o código.** O `docs/squad/.reconhecimento` guarda o commit da branch base que o mapa descreve. O
+bridge compara esse commit com a branch base usando o git, sem gastar tokens:
+
+- **Em dia:** nada mudou fora de `docs/squad`, e as etapas usam o mapa como está.
+- **Com mudanças:** poucos arquivos mudaram. Cada etapa recebe no prompt a lista desses arquivos e lê só os que
+  importam para a tarefa.
+- **Desatualizado:** houve mudanças estruturais (manifestos como `package.json`, migrations, CI, pastas novas no topo)
+  ou mais de 30 arquivos. A página da operação avisa e oferece **Atualizar mapa**, que cria uma feature para o arquiteto
+  reescrever só as seções afetadas, a partir da lista, e gravar o novo commit de referência.
+
+**Verificar**, no aviso, atualiza a branch base (`git fetch`) e compara de novo. Se o commit registrado sumiu do
+histórico, o bridge usa a data gravada no mapa para achar o commit equivalente.
+
 O vínculo só pode ser escolhido enquanto a operação ainda não tem nenhuma entrega, e a página nunca recebe o caminho
 ou a URL do repositório, só o `id` e o nome.
 
