@@ -270,7 +270,8 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
 - Existing repository: `project.repoId` (persisted; chosen in the briefing's REPOSITÓRIO EXISTENTE, `repoFieldHTML`, from
   `ui.bridge.repos`; fixed once a feature has an output, `repoLocked`) goes to the bridge as `repo` in `runOptionsFor`. Its F00 is
   **Reconhecimento do projeto** (`RECON_FEATURE`, `setupDef`; `ensureSetup` swaps an untouched F00 both ways; `isRecon`,
-  `RECON_BRIEF`): the agents map the code into `docs/squad/` (with `.reconhecimento`, the base commit), and a ```json `{"docs":{...}}` block at the end of a step fills the project fields still empty
+  `RECON_BRIEF`; squad-agnostic: commands come from the project files and are marked verified only by an agent with Bash, unverified
+  never blocks approval, `RECON_CMD` keeps the earlier criteria/tasks line so `ensureSetup` updates an untouched F00): the agents map the code into `docs/squad/` (with `.reconhecimento`, the base commit), and a ```json `{"docs":{...}}` block at the end of a step fills the project fields still empty
   (`applyReconDocs`, ADRs only when there are none). `runGate(p, f)`: while that F00 is pending and the documentation is incomplete
   (`reconOnly`), runs take F00 alone and need only name, briefing and squad (`reconGaps`); `startRun`, `openSpawn`/`spawnAgent` and the
   commander chat follow it. Later steps of a linked operation are told to read `docs/squad` before exploring (`buildStepPrompt`).
@@ -279,7 +280,7 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   `mapUpdate`) add `mapRef`, `permissionMode: 'dontAsk'`, Write/Edit in `tools` and only `Write(docs/squad/**)`/`Edit(docs/squad/**)` in
   `allowedTools` (plain write tools removed), so even an agent without Write writes there and nowhere else; the other features send
   `conventions` = `project.codeStandard` ('repo' default | 'squad'; persisted, PADRÃO DE CÓDIGO in `repoFieldHTML`). The prompts say
-  the bridge commits and writes `.reconhecimento` (no git asked of agents), and `commanderPlanPrompt` lists each colleague's tools;
+  the bridge commits and writes `.reconhecimento` (no git asked of agents), and `commanderPlanPrompt` lists each colleague's tools (and marks map features, where everyone writes `docs/squad`);
   the console shows the `commit` event and the room only a refused commit; the room and the console show the `worktree` event
   and the preparing phase (`prepare` steps as the typing line, `PREP_TYPING`, and a note for the prepare command; `prepare-log` in the console),
   and `approveFeature` asks the bridge to remove the worktree (the branch stays for the PR). The operation page keeps the map state
