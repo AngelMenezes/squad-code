@@ -267,7 +267,7 @@ A lista completa está no [guia](docs/GUIA.md#-controles).
 | `SQUAD_CLAUDE_BIN` | `claude` | Executável do Claude Code (nome no `PATH` ou caminho completo) |
 | `SQUAD_PROJECTS_DIR` | `./projects` | Raiz das pastas de trabalho dos agentes |
 | `SQUAD_DATA_DIR` | `./data` | Pasta do banco SQLite (`squad.db`) |
-| `SQUAD_REPOS` | `./data/repos.json` | Lista de repositórios existentes que uma operação pode vincular |
+| `SQUAD_REPOS` | `./data/repos.json` | Lista de repositórios existentes que uma operação pode vincular (editável em Configurações > Repositórios) |
 
 Exemplos:
 
@@ -287,6 +287,9 @@ No menu de configurações (botão **Configurações** no topo ou clique no stat
 - **Aba Claude Code:** modo (real ou demo), executável, modo de permissão (padrão `acceptEdits`), modelo e esforço
   globais, orçamento máximo por etapa (`--max-budget-usd`), tempo limite (padrão 900 s), execuções simultâneas
   (padrão 2), regras extras de `allowedTools` e `--add-dir`.
+- **Aba Repositórios:** cadastra, edita e remove os repositórios existentes que uma operação pode usar (caminho local
+  ou URL, subpasta de monorepo, branch base e comando de preparo). Grava em `data/repos.json`, sempre com uma cópia
+  `.bak` antes de gravar.
 - **Aba settings.json:** lê, valida e grava os `settings.json` reais do Claude Code (usuário, projeto ou local),
   sempre com uma cópia `.bak` antes de gravar.
 
@@ -297,6 +300,14 @@ primeira execução. É nela que os agentes leem e escrevem o código que implem
 etapas, chamadas entre colegas e chats) roda com essa pasta como diretório de trabalho, e o prompt de cada etapa manda
 manter tudo dentro dela. A pasta `projects/` fica fora do git do SQUAD/CODE e não é apagada quando você exclui a
 operação no app.
+
+**Projeto novo: commit e envio.** A pasta de um projeto novo é um repositório git próprio. Ao fim de cada etapa
+concluída, o bridge faz o commit do que o agente mudou (`SQUAD/CODE: <agente> / <feature>`); chats e o plano do
+comandante não geram commit. Para disponibilizar o código, por exemplo uma POC em desenvolvimento ou homologação, informe
+um **repositório remoto** vazio na criação da operação ou no briefing (sem usuário ou token na URL: o git usa o seu
+gerenciador de credenciais). A página da operação mostra **Enviar para o remoto**, que faz o `git push` da branch atual (`main` nas pastas criadas pelo app)
+da pasta; o deploy fica com o CI/CD desse repositório. Os agentes nunca enviam: depois do primeiro envio, o `origin`
+fica sem URL de envio para eles e o hook `pre-push` recusa qualquer push que não venha do botão.
 
 Cada pasta de projeto é um repositório git próprio (o bridge roda `git init` antes da primeira execução, se o Git estiver
 instalado), e o git dos agentes não passa da pasta `projects/`. Assim o `git status`, os commits e o
@@ -311,19 +322,34 @@ Code no Windows; nesse caso vale a instrução do prompt.
 
 ### Trabalhar em um projeto que já existe
 
-Uma operação pode partir de um repositório existente em vez de uma pasta vazia. Liste os repositórios em
-`data/repos.json` (o bridge só lê o arquivo, e as mudanças valem sem reiniciar):
+Uma operação pode partir de um repositório existente em vez de uma pasta vazia. Cadastre os repositórios em
+**Configurações > Repositórios** ou direto em `data/repos.json` (as mudanças valem sem reiniciar o bridge):
 
 ```json
 {
   "repos": [
     { "id": "faturamento", "name": "Faturamento", "path": "C:/code/faturamento", "baseBranch": "main", "prepare": "npm ci" },
-    { "id": "portal", "name": "Portal", "url": "https://github.com/empresa/portal.git", "baseBranch": "develop" }
+    { "id": "portal", "name": "Portal", "url": "https://github.com/empresa/portal.git", "baseBranch": "develop" },
+    { "id": "api", "name": "API do monorepo", "path": "C:/code/plataforma", "subdir": "apps/api", "baseBranch": "main" }
   ]
 }
 ```
 
-No briefing da operação, escolha o repositório em **REPOSITÓRIO EXISTENTE**. Então:
+**Monorepo.** Um repositório com vários projetos pode ser usado por pasta: informe a `subdir`, ou cadastre pela tela
+o caminho da própria pasta (o app grava a raiz do repositório e a subpasta). O clone é do repositório inteiro, mas os
+agentes trabalham só na subpasta, o `docs/squad/` fica dentro dela, o mapa considera só as mudanças dela e o commit de
+cada etapa inclui só os arquivos dela.
+
+Escolha o repositório ao criar a operação (**Nova operação > Repositório existente**) ou depois, no briefing, em
+**REPOSITÓRIO EXISTENTE**, e escolha também o **reconhecimento**:
+
+- **Com reconhecimento:** a F00 mapeia o código em `docs/squad/` antes das features (detalhes abaixo).
+- **Direto ao trabalho:** sem F00, para um fix ou um ajuste pontual. A execução precisa só de nome, briefing e squad, e
+  cada etapa lê apenas o que a tarefa pede (README, manifestos e os arquivos citados), sem varrer o repositório. O aviso
+  **Sem reconhecimento** na página da operação oferece **Fazer reconhecimento** a qualquer momento: a F00 volta, e as
+  features ainda não iniciadas passam a esperar o mapa.
+
+Então:
 
 - Na primeira execução a pasta da operação vira um **clone** do repositório (`git clone`). Os agentes nunca mexem na
   sua cópia de trabalho, e `git push` fica bloqueado: os envios ficam com você.
@@ -358,7 +384,7 @@ No briefing da operação, escolha o repositório em **REPOSITÓRIO EXISTENTE**.
   quem reescrever a configuração do git ou usar `--no-verify` de propósito passa. A proteção de verdade fica no
   servidor: ative a **proteção da branch base** no GitHub (exigir pull request) nos repositórios que vincular.
   Repositórios com `core.hooksPath` próprio (como o husky) ignoram esse hook, e aí vale só o bloqueio do `origin`.
-- A F00 deixa de ser o setup e vira **Reconhecimento do projeto**. Ela mapeia o código em `docs/squad/` (mapa,
+- Com reconhecimento, a F00 deixa de ser o setup e vira **Reconhecimento do projeto**. Ela mapeia o código em `docs/squad/` (mapa,
   arquitetura, convenções e comandos) e preenche os campos ainda vazios da documentação do projeto (visão, escopo,
   glossário, arquitetura e ADRs). Nas features de mapa (a F00 e as atualizações do mapa), os agentes só podem escrever
   em `docs/squad/`, mesmo os que não têm a ferramenta Write no perfil, e o bridge grava o commit de referência em
@@ -410,8 +436,9 @@ Para o Claude Code carregar a squad, o `CLAUDE.md` do repositório precisa da li
 exportação por branch, ela é criada automaticamente quando o repositório não tem `CLAUDE.md`; quando já tem, o arquivo
 do time não é alterado e o app avisa para você incluir a linha.
 
-O vínculo só pode ser escolhido enquanto a operação ainda não tem nenhuma entrega, e a página nunca recebe o caminho
-ou a URL do repositório, só o `id` e o nome.
+O vínculo e o modo de reconhecimento só podem ser escolhidos enquanto a operação ainda não tem nenhuma entrega. As
+execuções e o briefing recebem só o `id`, o nome e a subpasta do repositório; o caminho e a URL aparecem apenas em
+Configurações > Repositórios, com a URL mascarada quando tem credenciais (o app recusa gravar URLs assim).
 
 ### Dados do workspace
 

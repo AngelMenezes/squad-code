@@ -915,3 +915,156 @@ test('the bridge commits each linked step and writes .reconhecimento itself; the
     assert.ok(!(await step('f00-aaaaaa', 'x', { mapRef: true, conventions: 'repo' })).exit.result.includes('Padrão de código desta operação'));
   } finally { rmSync(reposFile, { force: true }); }
 });
+
+test('the repository registry is edited from the page: a folder inside a repository becomes a subfolder, URLs never carry credentials', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  mkdirSync(path.join(src, 'apps', 'api'), { recursive: true }); writeFileSync(path.join(src, 'apps', 'api', 'app.py'), 'print(1)\n');
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main'); gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'init');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  const put = (id, body) => api(`/api/repos/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  const same = (a, b) => assert.equal(path.resolve(a).toLowerCase(), path.resolve(b).toLowerCase());
+  try {
+    assert.deepEqual((await (await api('/api/repos')).json()).repos, []);
+    // A folder inside the repository is saved as the repository plus its subfolder.
+    const created = await put('mono', { name: 'Monorepo', path: path.join(src, 'apps', 'api'), baseBranch: 'main', prepare: 'npm ci', create: true });
+    assert.equal(created.status, 201, await created.clone().text());
+    const listed = (await created.json()).repos.find(r => r.id === 'mono');
+    same(listed.path, src);
+    assert.deepEqual([listed.subdir, listed.baseBranch, listed.prepare, listed.error], ['apps/api', 'main', 'npm ci', null]);
+    const stored = JSON.parse(readFileSync(reposFile, 'utf8')).repos[0];
+    same(stored.path, src);
+    assert.equal(stored.subdir, 'apps/api');
+    // The briefing gets the id and the subfolder, never the path.
+    const health = (await (await api('/api/health')).json()).repos.repos.find(r => r.id === 'mono');
+    assert.deepEqual([health.subdir, health.path], ['apps/api', undefined]);
+    assert.equal((await put('mono', { path: src, create: true })).status, 409);
+    // Edited: a fixed subfolder, then back to the root.
+    assert.equal((await put('mono', { name: 'Mono', path: src, subdir: 'apps/api/' })).status, 200);
+    assert.equal(JSON.parse(readFileSync(reposFile, 'utf8')).repos[0].subdir, 'apps/api');
+    assert.ok(existsSync(reposFile + '.bak'));
+    // URLs: never with credentials from the page; one written by hand is masked and kept when sent back unchanged.
+    assert.equal((await put('remoto', { url: 'https://user:tok@github.com/x/y.git' })).status, 400);
+    assert.equal((await put('remoto', { url: 'https://github.com/x/y.git', create: true })).status, 201);
+    const raw = JSON.parse(readFileSync(reposFile, 'utf8'));
+    raw.repos.push({ id: 'manual', url: 'https://tok123@github.com/x/z.git', extra: 'fica' });
+    writeFileSync(reposFile, JSON.stringify(raw));
+    const masked = (await (await api('/api/repos')).json()).repos.find(r => r.id === 'manual');
+    assert.equal(masked.url, 'https://***@github.com/x/z.git');
+    assert.equal((await put('manual', { name: 'Manual', url: masked.url })).status, 200);
+    const kept = JSON.parse(readFileSync(reposFile, 'utf8')).repos.find(r => r.id === 'manual');
+    assert.deepEqual([kept.url, kept.name, kept.extra], ['https://tok123@github.com/x/z.git', 'Manual', 'fica']);
+    // Refusals.
+    for (const [id, body] of [['Bad Id', { path: src }], ['rel', { path: 'apps/api' }], ['both', { path: src, url: 'https://github.com/x/y.git' }], ['none', {}], ['nogit', { path: tmpdir() }], ['sub', { path: src, subdir: '../fora' }], ['br', { path: src, baseBranch: '-x' }]]) {
+      assert.equal((await put(encodeURIComponent(id), body)).status, 400, id);
+    }
+    // Removal, and a broken file is never overwritten.
+    assert.equal((await api('/api/repos/remoto', { method: 'DELETE' })).status, 200);
+    assert.equal((await api('/api/repos/remoto', { method: 'DELETE' })).status, 404);
+    writeFileSync(reposFile, '{ quebrado');
+    assert.equal((await put('mono', { path: src })).status, 409);
+    assert.equal(readFileSync(reposFile, 'utf8'), '{ quebrado');
+  } finally { rmSync(reposFile, { force: true }); rmSync(reposFile + '.bak', { force: true }); }
+});
+
+test('a monorepo subfolder: the agents work in it, its docs/squad holds the map, and only its files are committed', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  const put = (cwd, file, text) => { mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true }); writeFileSync(path.join(cwd, file), text); };
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main');
+  put(src, 'README.md', '# Bootcamp\n'); put(src, 'apps/api/app.py', 'print(1)\n'); put(src, 'apps/web/index.html', '<p>web</p>\n');
+  gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'init');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'mono', path: path.join(src, 'apps', 'api'), baseBranch: 'main' }, { id: 'mono-x', path: src, subdir: 'apps/nope', baseBranch: 'main' }] }));
+  const folder = 'op-090-mono', root = path.join(projectsRoot, folder), wt = path.join(root, '.wt', 'f00-aaaaaa');
+  const go = async (options, prompt = 'x', repo = 'mono', project = folder) => {
+    const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt, label: 'PROPHET / F00', options: { project, repo, ...options } }) });
+    assert.equal(res.status, 201, await res.clone().text());
+    const { cwd, runId } = await res.json();
+    return { cwd, events: await collect(runId) };
+  };
+  const real = p => realpathSync.native(p).toLowerCase();
+  try {
+    // Plans run in the clone's subfolder and get no map yet.
+    const plan = await go({ withMap: true });
+    assert.equal(plan.cwd.toLowerCase(), real(path.join(root, 'apps', 'api')));
+    assert.match(plan.events.at(-1).result, /Ainda não há docs\/squad\/mapa\.md/);
+    // Reconnaissance: the worktree's subfolder; the map and .reconhecimento go to apps/api/docs/squad, and only that is committed.
+    const recon = await go({ feature: 'f00-aaaaaa', mapRef: true }, 'mapear WRITE:docs/squad/mapa.md WRITE:../web/fora.html');
+    assert.equal(recon.cwd.toLowerCase(), real(path.join(wt, 'apps', 'api')));
+    assert.equal(recon.events.at(-1).status, 'done', JSON.stringify(recon.events.at(-1)));
+    assert.deepEqual(recon.events.find(e => e.subtype === 'commit').files.sort(), ['apps/api/docs/squad/.reconhecimento', 'apps/api/docs/squad/mapa.md']);
+    assert.match(gitIn(root, 'show', 'squad/f00-aaaaaa:apps/api/docs/squad/.reconhecimento'), /^commit=[0-9a-f]{40}\nbranch_base=main\n/);
+    // The team merges the map; later changes count only inside the subfolder, with paths relative to it.
+    await api(`/api/worktrees/${folder}/f00-aaaaaa`, { method: 'DELETE' });
+    assert.equal((await api(`/api/branches/${folder}/push`, { method: 'POST', body: JSON.stringify({ repo: 'mono', branch: 'squad/f00-aaaaaa' }) })).status, 200);
+    gitIn(src, 'merge', '-q', '--no-ff', '-m', 'PR mapa', 'squad/f00-aaaaaa');
+    put(src, 'apps/api/app.py', 'print(2)\n'); put(src, 'apps/web/index.html', '<p>web 2</p>\n'); gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'depois');
+    const map = await (await api(`/api/map/${folder}?repo=mono&fetch=1`)).json();
+    assert.deepEqual([map.status, map.total, map.files], ['changed', 1, ['M app.py']]);
+    const step = await go({ feature: 'f01-bbbbbb' });
+    assert.deepEqual(step.events.find(e => e.subtype === 'map').files, ['M app.py']);
+    assert.match(step.events.at(-1).result, /## Mudanças no repositório desde o mapa[\s\S]*M app\.py/);
+    // Plan paths are relative to the subfolder too.
+    const paths = await (await api(`/api/paths/${folder}`, { method: 'POST', body: JSON.stringify({ repo: 'mono', paths: ['app.py', 'docs/squad/mapa.md', 'apps/web/index.html'] }) })).json();
+    assert.deepEqual(paths.exists, { 'app.py': true, 'docs/squad/mapa.md': true, 'apps/web/index.html': false });
+    // A subfolder missing from the repository stops the run before claude starts.
+    const missing = await go({}, 'x', 'mono-x', 'op-091-mono-x');
+    assert.equal(missing.events.at(-1).status, 'error');
+    assert.match(missing.events.at(-1).error, /subpasta apps\/nope não existe/);
+    assert.ok(!missing.events.some(e => e.subtype === 'spawned'));
+  } finally { rmSync(reposFile, { force: true }); }
+});
+
+test('a new project commits each step in its own folder and the person publishes it to an empty remote; agents never push', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const remote = tmp('squad-remote-'); extraDirs.push(remote);
+  execFileSync('git', ['init', '-q', '--bare', remote], { stdio: 'ignore' });
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  const folder = 'op-095-poc', dir = path.join(projectsRoot, folder);
+  const go = async (options, prompt) => {
+    const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt, label: 'FORGE / F00', options: { project: folder, ...options } }) });
+    assert.equal(res.status, 201, await res.clone().text());
+    const { runId, args } = await res.json();
+    return { args, events: await collect(runId) };
+  };
+  const publish = (body, f = folder) => api(`/api/publish/${f}`, { method: 'POST', body: JSON.stringify(body) });
+  // Nothing to send before the first commit.
+  await go({}, 'conversar');
+  assert.equal((await publish({ remote })).status, 409);
+  // A feature step (commit: true) is committed by the bridge; a chat or plan (no commit) is not.
+  const step = await go({ commit: true }, 'base WRITE:src/main.py');
+  assert.deepEqual(step.events.find(e => e.subtype === 'commit').files, ['src/main.py']);
+  assert.equal(gitIn(dir, 'log', '-1', '--format=%s'), 'SQUAD/CODE: FORGE / F00');
+  assert.ok(step.args[step.args.indexOf('--disallowedTools') + 1].split(',').includes('Bash(git push:*)'));
+  const chat = await go({}, 'rascunho WRITE:notas.md');
+  assert.ok(!chat.events.some(e => e.subtype === 'commit'));
+  // Refusals: credentials in the URL, a relative path.
+  assert.equal((await publish({ remote: 'https://user:tok@github.com/x/y.git' })).status, 400);
+  assert.equal((await publish({ remote: 'remoto' })).status, 400);
+  // The person publishes: the current branch goes to the remote; uncommitted files are reported, not sent.
+  const r = await (await publish({ remote })).json();
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual([r.branch, r.local, r.dirty, r.web], ['main', true, true, null]);
+  assert.equal(gitIn(remote, 'rev-parse', `refs/heads/${r.branch}`), gitIn(dir, 'rev-parse', 'HEAD'));
+  assert.ok(!gitIn(remote, 'ls-tree', '-r', '--name-only', r.branch).includes('notas.md'));
+  // The agents cannot push: origin has no push URL and the hook refuses any other target.
+  assert.throws(() => gitIn(dir, 'push', 'origin', r.branch));
+  assert.throws(() => gitIn(dir, 'push', remote, 'HEAD:refs/heads/escapou'));
+  assert.equal(gitIn(remote, 'branch', '--list', 'escapou'), '');
+  // A next step is committed and a second publish sends it.
+  await go({ commit: true }, 'mais WRITE:src/util.py');
+  assert.equal((await publish({ remote })).status, 200);
+  assert.equal(gitIn(remote, 'rev-parse', `refs/heads/${r.branch}`), gitIn(dir, 'rev-parse', 'HEAD'));
+  // A linked operation's clone is never published (its branches go with Enviar branch).
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main'); writeFileSync(path.join(src, 'a.md'), 'a\n'); gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'a');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'pub', path: src, baseBranch: 'main' }] }));
+  try {
+    await collect((await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: 'op-096-linked', repo: 'pub' } }) })).json()).runId);
+    assert.equal((await publish({ remote }, 'op-096-linked')).status, 409);
+  } finally { rmSync(reposFile, { force: true }); }
+});

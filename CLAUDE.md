@@ -59,11 +59,17 @@ Every project runs in its own folder: the `project` option (a plain slug, `FOLDE
 cwd `<PROJECTS_DIR>/<folder>` (`./projects` next to `server.js`, created at start; `SQUAD_PROJECTS_DIR` for tests), created on the
 first run. Because Claude Code loads CLAUDE.md from every folder above the cwd, those runs also get `--settings <temp file>` with
 `claudeMdExcludes` (`APP_MEMORY_EXCLUDES`) so agents never see this app's own CLAUDE.md/AGENTS.md/rules. Each project folder is its
-own git repository (`ensureProjectRepo`: `git init` before a run when `.git` is missing; skipped without git) and project runs get
+own git repository (`ensureProjectRepo`: `git init` before a run when `.git` is missing, always on branch `main` via `symbolic-ref`; skipped without git) and project runs get
 `GIT_CEILING_DIRECTORIES` = PROJECTS_DIR (`gitCeiling`), so Claude Code (git status, `.claude/settings.json` from the repo root outside
 Windows) and the agents' git commands never reach the enclosing repository (this app's clone). The same settings file sets
-`permissions.blockReadsOutsideWorkingDirectories`, so the file tools refuse reads outside the folder (and `--add-dir`). Linked operations: the `repo` option (an id of `REPOS_FILE` = `SQUAD_REPOS` or `data/repos.json`, `loadRepos`, read on every
-use, never written; entries `{id, name, path | url, baseBranch, prepare}`) replaces the `git init`: `checkProjectClone` (before the
+`permissions.blockReadsOutsideWorkingDirectories`, so the file tools refuse reads outside the folder (and `--add-dir`). Linked operations: the `repo` option (an id of `REPOS_FILE` = `SQUAD_REPOS` or `data/repos.json`, `loadRepos`/`repoEntry`, read on every
+use; entries `{id, name, path | url, subdir, baseBranch, prepare}`; written only by `PUT|DELETE /api/repos/:id` (`saveRepoEntry`,
+`.bak` copy, unknown fields kept, a broken file is a 409 and never overwritten), `GET /api/repos` (`reposListing`: paths, URLs masked by
+`maskUrl`); URLs with userinfo are refused from the page (`CRED_URL_RE`)). **Monorepo:** `subdir`, or a `path` inside a repository
+(`repoRootOf` walks up to the `.git`; saved as the root plus the subfolder), scopes the operation to that folder of the clone: plans and
+chats run in `<clone>/<subdir>`, steps in `<worktree>/<subdir>` (a missing one ends the preparing phase with an error), `prepare` runs
+there, and every repository path the bridge reads goes through `repoPath(repo, p)` (map, `.reconhecimento`, conventions, plan paths,
+export); `mapStatus(cwd, target, sub)` diffs with `--relative=<sub>`, and `commitStep` adds only `-- <subdir>`. It replaces the `git init`: `checkProjectClone` (before the
 answer, so refusals are a 400) accepts an empty folder or one holding only the empty repository of an earlier `git init` (to be cloned)
 and a clone of the same origin (reused), and refuses anything else. The clone, the feature's worktree and its prepare command run
 after the answer as the run's preparing phase (`prepareRun`, `run.phase` 'preparing' → 'running', `launchRun` spawns claude after it,
@@ -95,7 +101,12 @@ changed, `error` when refused). With `mapRef` (map features) it first writes `do
 steps) `conventionsNote` appends the operation's code standard, built from `docs/squad/convencoes.md` on the base branch only (the
 approved one, never the worktree's draft). `withMap: true` (plan runs) appends
 `docs/squad/mapa.md` from the base, or the clone, plus the change list (`mapForPlan`). `/api/health` sends `repos` (`publicRepos`: ids,
-names, branches, errors; never the path or URL). An explicit `cwd` stays as a fallback
+names, branches, subfolders, errors; never the path or URL). **New projects** (no `repo`): a feature step sent with `commit: true` gets
+the same `commitStep` in the operation folder (`run.stepCommit` with `repo: null`); every project run disallows `Bash(git push:*)`.
+`POST /api/publish/:folder {remote}` (person-initiated; `remote` = https/ssh/git@ URL without userinfo, or an existing absolute path)
+sets `origin` (marked `squad.publish`, refused with 409 on a linked clone, whose origin is the registered repository, and before the
+first commit), applies `guardClone`, pushes the current branch to the URL with `SQUAD_BRIDGE_PUSH=1` and answers `{branch, commit,
+dirty, web}` (`webUrl`); later runs of a folder with an origin get `guardClone` too. An explicit `cwd` stays as a fallback
 (tests, direct API use); a run with neither `project` nor `cwd` is refused (never `process.cwd()`, the app folder). The step prompt
 (`buildStepPrompt`) and `CALLED_AGENT_SYSTEM` tell agents to keep every file inside the folder. The settings.json project/local scopes
 take `project=` as well.
@@ -238,11 +249,14 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   A double click on a free hex/desk (`onCreateAt`) opens the studio with `squadId` (`ui.draft.squadId`); `saveAgent`
   puts that new agent into the squad (`squadJoinSlot`/`squadJoin`: operator, the ADR/PRD seat if it is free, a second
   commander is refused) and into an open Squad Studio draft of it. "Novo agente" (key `A`) still creates it outside squads.
-- **Nova operação** (`project-new` → `openProjectEditor()` → `openOpNew`) is a two-step wizard in a modal (kind `op-new`, `ui.opNew`):
-  the name (`#opNewForm` → `opNewNext`), then an existing squad (`op-new-existing` → `#opNewSquadForm` with `squadPickerHTML` →
-  `opNewCreate`) or a new one (`op-new-squad` → `opNewNewSquad`: `ui.opPending={name}` + `newSquad()`; the Studio tags the draft and
-  `saveSquad` creates the operation with the new squad; cancelling, picking another squad or leaving the Studio drops `ui.opPending`).
-  `createOperation` creates and persists it at once (`blankProject`, folder, "Sprint 01", empty briefing); the briefing is not
+- **Nova operação** (`project-new` → `openProjectEditor()` → `openOpNew`) is a three-step wizard in a modal (kind `op-new`, `ui.opNew`
+  `{name, repoId, reconMode, remote}`): the name (`#opNewForm` → `opNewNext`), where the code comes from (`opNewCodeStep`,
+  `#opNewCodeForm` → `opNewCode`: a new project with an optional remote, checked by `remoteProblem`, or a registered repository with
+  reconnaissance or direct work; the sub-fields follow the radios through CSS `:has`), then an existing squad (`op-new-existing` →
+  `#opNewSquadForm` with `squadPickerHTML` → `opNewCreate`) or a new one (`op-new-squad` → `opNewNewSquad`: `ui.opPending={...ui.opNew}` +
+  `newSquad()`; the Studio tags the draft and `saveSquad` creates the operation with the new squad; cancelling, picking another squad or
+  leaving the Studio drops `ui.opPending`). `op-new-back`/`op-new-back-code` keep the choices.
+  `createOperation(name, sq, msg, code)` creates and persists it at once (`blankProject`, the code choice, folder, "Sprint 01", empty briefing); the briefing is not
   required by `saveProject`, `projectGaps`/`runGate` block runs until it is filled. The older inline draft (`ui.opsNew`, the
   `creating` branches of the projects page) no longer has an entry point.
 - A project/operation references exactly one `squadId` (required in `saveProject`; `deleteSquad` refuses a
@@ -267,8 +281,19 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   runs before it is approved. It runs in `createOperation`, `saveProject`, `saveFeature` and `normalizeWorkspace` (older workspaces
   get it in backlog; the boot then writes the database at once, `diskSync.migrated`). It cannot be deleted, dragged or moved to another
   sprint; the editor locks its sprint and shows it as a fixed dependency of new features (`featureDraftFor`). The seed's F00 is done.
-- Existing repository: `project.repoId` (persisted; chosen in the briefing's REPOSITÓRIO EXISTENTE, `repoFieldHTML`, from
-  `ui.bridge.repos`; fixed once a feature has an output, `repoLocked`) goes to the bridge as `repo` in `runOptionsFor`. Its F00 is
+- New project (no `repoId`): `executeLiveStep` sends `commit: true`, so the bridge commits each step in the operation folder.
+  `project.remote` (persisted; wizard or the briefing's REPOSITÓRIO REMOTO, `.if-new`) is where **Enviar para o remoto**
+  (`publishNoticeHTML` in the features head, shown once a live output exists; `publishProject` → `/api/publish`) sends it;
+  `project.published` `{at, branch, commit}` (persisted) keeps the last send, `ui.publishWeb` its web link.
+- Existing repository: `project.repoId` (persisted; chosen in the wizard or the briefing's REPOSITÓRIO EXISTENTE, `repoFieldHTML`, from
+  `ui.bridge.repos`; fixed once a feature has an output, `repoLocked`) goes to the bridge as `repo` in `runOptionsFor`. Repositories are
+  registered in Configurações > Repositórios (tab `repos`: `loadRepoList`, `renderRepoPane`, `#repoForm` → `saveRepo`, `repoDelete` with
+  a second click to confirm; the identifier field is named `key`, since a control named `id` would shadow `form.id` in the submit router).
+  `project.reconMode` (persisted, 'map' | 'direct', RECONHECIMENTO in the briefing, `.if-linked`, locked like the repository):
+  `directMode(p)` = linked + 'direct' (e.g. a fix): `ensureSetup` drops an untouched F00 (and unblocks what only waited for it) and
+  creates none, runs need only `reconGaps` (`runGaps`, used by `runGate`, the features head and the commander chat), the steps get the
+  "sem reconhecimento" section of `buildStepPrompt`, and `mapNoticeHTML` offers **Fazer reconhecimento** (`startRecon`: back to 'map',
+  `ensureSetup` creates the F00 and the features not started wait for it). With 'map' its F00 is
   **Reconhecimento do projeto** (`RECON_FEATURE`, `setupDef`; `ensureSetup` swaps an untouched F00 both ways; `isRecon`,
   `RECON_BRIEF`; squad-agnostic: commands come from the project files and are marked verified only by an agent with Bash, unverified
   never blocks approval, `RECON_CMD` keeps the earlier criteria/tasks line so `ensureSetup` updates an untouched F00): the agents map the code into `docs/squad/` (with `.reconhecimento`, the base commit), and a ```json `{"docs":{...}}` block at the end of a step fills the project fields still empty

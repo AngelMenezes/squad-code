@@ -138,27 +138,68 @@ const APP_MEMORY_EXCLUDES = (() => {
 
 /* Each project folder is its own git repository (git init before its first run, when git is installed). Otherwise Claude Code, which
  * takes the enclosing repository as the project (git status, .claude/settings.json outside Windows), and the agents' git commands
- * would work on whatever repository holds PROJECTS_DIR, such as this app's clone. GIT_CEILING_DIRECTORIES (startRun) covers the rest. */
+ * would work on whatever repository holds PROJECTS_DIR, such as this app's clone. GIT_CEILING_DIRECTORIES (startRun) covers the rest.
+ * The branch is always main, whatever the person's init.defaultBranch: a new project is published with it (/api/publish). Pointing
+ * HEAD before the first commit works on any git version (init -b needs 2.28). */
 const gitCeiling = () => [longPath(PROJECTS_DIR), process.env.GIT_CEILING_DIRECTORIES].filter(Boolean).join(path.delimiter);
 let gitMissing = false;
 function ensureProjectRepo(dir) {
   if (gitMissing || fs.existsSync(path.join(dir, '.git'))) return Promise.resolve();
+  const opts = { cwd: dir, windowsHide: true, timeout: 15000, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling() } };
   return new Promise(resolve => {
-    execFile('git', ['init', '-q'], { cwd: dir, windowsHide: true, timeout: 15000, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling() } }, err => {
+    execFile('git', ['init', '-q'], opts, err => {
       if (err?.code === 'ENOENT') { gitMissing = true; console.warn('git não encontrado: as pastas dos projetos ficam sem repositório próprio. Instale o Git para isolá-las.'); }
       else if (err) console.warn(`git init em ${dir} falhou: ${err.message}`);
-      resolve();
+      if (err) return resolve();
+      execFile('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], opts, e => { if (e) console.warn(`branch main em ${dir} falhou: ${e.message}`); resolve(); });
     });
   });
 }
 
-/* Existing repositories an operation can link to (project.repoId). The person lists them in REPOS_FILE, read on every use (it can be
- * edited while the bridge runs, and the bridge never writes it): {"repos":[{"id":"billing","name":"Faturamento","path":"C:/code/billing"
- * (or "url":"https://..."),"baseBranch":"main"}]}. The page only names an id, never a path. A linked operation's folder becomes a
- * clone of that repository (checkProjectClone, cloneProject), so the agents never touch the person's own working copy. */
+/* Existing repositories an operation can link to (project.repoId). They live in REPOS_FILE, read on every use (it can be edited
+ * while the bridge runs): {"repos":[{"id":"billing","name":"Faturamento","path":"C:/code/billing" (or "url":"https://..."),
+ * "subdir":"apps/api","baseBranch":"main","prepare":"npm ci"}]}. The person edits it by hand or in Configurações > Repositórios
+ * (/api/repos, the only writer, with a .bak copy). Runs and the briefing only name an id. A linked operation's folder becomes a clone
+ * of that repository (checkProjectClone, cloneProject), so the agents never touch the person's own working copy. "subdir" (or a "path"
+ * inside a repository, resolved to the repository plus its subfolder) scopes a monorepo: the agents work in that folder of the clone
+ * and docs/squad lives there (repoPath). */
 const REPOS_FILE = path.resolve(process.env.SQUAD_REPOS || path.join(DATA_DIR, 'repos.json'));
 const BRANCH_RE = /^(?![-/.])(?!.*\.\.)[A-Za-z0-9._/-]{1,100}$/;
 const REPO_URL_RE = /^(https:\/\/|ssh:\/\/|git@)[^\s"']{3,500}$/;
+// https URLs with a user, password or token: refused when saved from the page (the git credential manager keeps those) and masked.
+const CRED_URL_RE = /^https?:\/\/[^/@\s]+@/;
+const maskUrl = u => String(u || '').replace(/^(https?:\/\/)[^/@\s]+@/, '$1***@');
+const cleanSubdir = s => String(s || '').trim().replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/{2,}/g, '/').replace(/^\/+|\/+$/g, '');
+const subdirOk = s => !s || (s.length <= 200 && s.split('/').every(seg => seg && seg !== '.' && seg !== '..' && !seg.startsWith('-') && !/[:*?"<>|]/.test(seg)));
+/** Path of a file of the operation inside the repository: under the monorepo subfolder when there is one. */
+const repoPath = (repo, p) => repo?.subdir ? `${repo.subdir}/${p}` : p;
+const subdirParts = repo => repo?.subdir ? repo.subdir.split('/') : [];
+/** The repository that holds dir: dir itself (working copy or bare) or the nearest folder above it with .git (monorepo subfolder). */
+function repoRootOf(dir) {
+  if (fs.existsSync(path.join(dir, '.git')) || fs.existsSync(path.join(dir, 'HEAD'))) return dir;
+  for (let cur = path.dirname(dir); ; cur = path.dirname(cur)) {
+    if (fs.existsSync(path.join(cur, '.git'))) return cur;
+    if (path.dirname(cur) === cur) return null;
+  }
+}
+function repoEntry(r) {
+  const id = String(r?.id || '').trim(), url = typeof r?.url === 'string' ? r.url.trim() : '';
+  let dir = !url && typeof r?.path === 'string' && r.path.trim() ? path.resolve(path.dirname(REPOS_FILE), r.path.trim()) : '';
+  let subdir = cleanSubdir(r?.subdir), error = null;
+  const baseBranch = typeof r?.baseBranch === 'string' ? r.baseBranch.trim() : '';
+  if (url) { if (!REPO_URL_RE.test(url)) error = 'URL inválida (use https://, ssh:// ou git@).'; }
+  else if (!dir) error = 'Informe "path" ou "url".';
+  else if (!fs.existsSync(dir)) error = 'O caminho não existe.';
+  else {
+    const root = repoRootOf(dir);
+    if (!root) error = 'O caminho não é um repositório git nem uma pasta dentro de um.';
+    else if (root !== dir) { subdir = cleanSubdir([path.relative(root, dir).split(path.sep).join('/'), subdir].filter(Boolean).join('/')); dir = root; }
+  }
+  if (!subdirOk(subdir)) error = 'Subpasta inválida.';
+  if (baseBranch && !BRANCH_RE.test(baseBranch)) error = 'baseBranch inválida.';
+  const prepare = typeof r?.prepare === 'string' ? r.prepare.trim().slice(0, 500) : '';
+  return { id, name: String(r?.name || id).slice(0, 80), source: url || (dir && fs.existsSync(dir) ? longPath(dir) : dir), baseBranch, prepare, subdir, error, path: url ? '' : dir, url };
+}
 function loadRepos() {
   let raw;
   try { raw = JSON.parse(fs.readFileSync(REPOS_FILE, 'utf8')); }
@@ -169,21 +210,55 @@ function loadRepos() {
     const id = String(r?.id || '').trim();
     if (!FOLDER_RE.test(id) || seen.has(id)) continue;
     seen.add(id);
-    const url = typeof r.url === 'string' ? r.url.trim() : '';
-    const dir = !url && typeof r.path === 'string' && r.path.trim() ? path.resolve(path.dirname(REPOS_FILE), r.path.trim()) : '';
-    const baseBranch = typeof r.baseBranch === 'string' ? r.baseBranch.trim() : '';
-    let error = null;
-    if (url) { if (!REPO_URL_RE.test(url)) error = 'URL inválida (use https://, ssh:// ou git@).'; }
-    else if (!dir) error = 'Informe "path" ou "url".';
-    else if (!fs.existsSync(path.join(dir, '.git')) && !fs.existsSync(path.join(dir, 'HEAD'))) error = 'O caminho não é um repositório git.';
-    if (baseBranch && !BRANCH_RE.test(baseBranch)) error = 'baseBranch inválida.';
-    const prepare = typeof r.prepare === 'string' ? r.prepare.trim().slice(0, 500) : '';
-    repos.push({ id, name: String(r.name || id).slice(0, 80), source: url || (fs.existsSync(dir) ? longPath(dir) : dir), baseBranch, prepare, error });
+    repos.push(repoEntry(r));
   }
   return { file: REPOS_FILE, repos, error: null };
 }
-// What the page sees: no path or URL (a URL may carry credentials).
-const publicRepos = () => { const r = loadRepos(); return { file: r.file, error: r.error, repos: r.repos.map(({ id, name, baseBranch, error }) => ({ id, name, baseBranch, error })) }; };
+// What runs and the briefing see: no path or URL.
+const publicRepos = () => { const r = loadRepos(); return { file: r.file, error: r.error, repos: r.repos.map(({ id, name, baseBranch, subdir, error }) => ({ id, name, baseBranch, subdir, error })) }; };
+// Configurações > Repositórios: the paths too, URLs masked (a URL saved by hand may carry a token).
+const reposListing = () => { const r = loadRepos(); return { file: r.file, error: r.error, repos: r.repos.map(x => ({ id: x.id, name: x.name, path: x.path, url: maskUrl(x.url), subdir: x.subdir, baseBranch: x.baseBranch, prepare: x.prepare, error: x.error })) }; };
+function readReposFile() {
+  let text;
+  try { text = fs.readFileSync(REPOS_FILE, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return { data: { repos: [] }, list: [] }; throw e; }
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw Object.assign(new Error(`${REPOS_FILE} não é um JSON válido (${e.message}). Corrija o arquivo antes de editar pelo app.`), { status: 409 }); }
+  const list = Array.isArray(data) ? data : Array.isArray(data?.repos) ? data.repos : null;
+  if (!list) throw Object.assign(new Error(`${REPOS_FILE} não tem a lista "repos". Corrija o arquivo antes de editar pelo app.`), { status: 409 });
+  return { data, list };
+}
+function writeReposFile({ data }, list) {
+  fs.mkdirSync(path.dirname(REPOS_FILE), { recursive: true });
+  if (fs.existsSync(REPOS_FILE)) fs.copyFileSync(REPOS_FILE, `${REPOS_FILE}.bak`);
+  const tmpFile = `${REPOS_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify(Array.isArray(data) ? list : { ...data, repos: list }, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmpFile, REPOS_FILE);
+}
+/** PUT /api/repos/<id>: one entry, created or replaced. A path inside a repository is saved as the repository plus its subfolder; a
+ * masked URL sent back unchanged keeps the stored one. Fields the app does not know stay. */
+function saveRepoEntry(id, body) {
+  if (!FOLDER_RE.test(id)) throw new Error('Identificador inválido: use letras minúsculas, números e hífens (ex.: faturamento).');
+  const file = readReposFile(), i = file.list.findIndex(r => String(r?.id || '').trim() === id), old = i >= 0 ? file.list[i] : null;
+  if (body.create && old) throw Object.assign(new Error(`Já existe um repositório com o identificador ${id}.`), { status: 409 });
+  if (!old && file.list.length >= 50) throw new Error('Até 50 repositórios no cadastro.');
+  const str = (v, n) => typeof v === 'string' ? v.trim().slice(0, n) : '';
+  let url = str(body.url, 500);
+  const dir = str(body.path, 1000);
+  if (url && old?.url && url === maskUrl(old.url)) url = old.url;
+  else if (CRED_URL_RE.test(url)) throw new Error('Não coloque usuário, senha ou token na URL: o git usa o seu gerenciador de credenciais.');
+  if (!!url === !!dir) throw new Error('Informe o caminho local ou a URL do repositório (um dos dois).');
+  if (dir && !path.isAbsolute(dir)) throw new Error('Informe o caminho completo da pasta (ex.: C:/code/faturamento).');
+  const { url: _u, path: _p, subdir: _s, baseBranch: _b, prepare: _r, name: _n, ...rest } = old && typeof old === 'object' ? old : {};
+  const entry = { ...rest, id, name: str(body.name, 80) || id, ...(url ? { url } : { path: dir }), subdir: cleanSubdir(body.subdir), baseBranch: str(body.baseBranch, 100), prepare: str(body.prepare, 500) };
+  const checked = repoEntry(entry);
+  if (checked.error) throw new Error(checked.error);
+  if (!url) entry.path = checked.path.split(path.sep).join('/');
+  entry.subdir = checked.subdir;
+  for (const k of ['subdir', 'baseBranch', 'prepare']) if (!entry[k]) delete entry[k];
+  if (old) file.list[i] = entry; else file.list.push(entry);
+  writeReposFile(file, file.list);
+  return !old;
+}
 
 // track(child) receives each git process, so a cancelled run can kill the one in progress.
 const gitRun = (args, cwd, timeout = 15000, track, env = {}) => new Promise((resolve, reject) => {
@@ -260,7 +335,7 @@ async function ensureWorktree(root, repo, slug, baseSlug, track, say) {
       try { await gitRun(['fetch', '-q', 'origin'], root, 300000, track); } catch (e) { notes.push(`git fetch falhou, a feature parte da cópia local: ${e.message}`); }
       let start = repo.baseBranch ? `origin/${repo.baseBranch}` : 'origin/HEAD';
       if (!await gitOk(['rev-parse', '--verify', '-q', `${start}^{commit}`], root)) start = repo.baseBranch || 'HEAD';
-      if (baseSlug && !await gitOk(['cat-file', '-e', `${start}:docs/squad/mapa.md`], root) && await gitOk(['rev-parse', '--verify', '-q', `refs/heads/squad/${baseSlug}`], root)) {
+      if (baseSlug && !await gitOk(['cat-file', '-e', `${start}:${repoPath(repo, 'docs/squad/mapa.md')}`], root) && await gitOk(['rev-parse', '--verify', '-q', `refs/heads/squad/${baseSlug}`], root)) {
         start = `squad/${baseSlug}`;
         notes.push(`O mapa ainda não está na branch base: a feature parte de ${start}.`);
       }
@@ -281,7 +356,7 @@ function prepareWorktree(root, dir, repo, slug, track, onOutput) {
   return new Promise(resolve => {
     let out = '', done = false;
     const finish = (ok, text) => { if (!done) { done = true; clearTimeout(timer); resolve({ ok, text }); } };
-    const child = spawn(repo.prepare, { cwd: dir, shell: true, windowsHide: true, detached: !IS_WIN, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling() } });
+    const child = spawn(repo.prepare, { cwd: path.join(dir, ...subdirParts(repo)), shell: true, windowsHide: true, detached: !IS_WIN, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling() } });
     track?.(child);
     const keep = d => { out = (out + d).slice(-4000); onOutput?.(d.slice(0, 4000)); };
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
@@ -312,17 +387,19 @@ const MAP_FILE = 'docs/squad/.reconhecimento';
 const MAP_SMALL = 30;
 const STRUCTURAL_RE = /(^|\/)(package\.json|pnpm-workspace\.yaml|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|go\.mod|Cargo\.toml|requirements[^/]*\.txt|pyproject\.toml|Gemfile|composer\.json|[^/]+\.csproj|[^/]+\.sln|Dockerfile|docker-compose[^/]*\.ya?ml)$|(^|\/)migrations?\/|^\.github\/workflows\//i;
 const baseRef = repo => repo.baseBranch ? `origin/${repo.baseBranch}` : 'origin/HEAD';
-async function mapStatus(cwd, target) {
+async function mapStatus(cwd, target, sub = '') {
   let text = '';
-  try { text = await gitRun(['show', `${target}:${MAP_FILE}`], cwd); } catch { return { status: 'missing', target }; }
+  const at = p => sub ? `${sub}/${p}` : p;
+  try { text = await gitRun(['show', `${target}:${at(MAP_FILE)}`], cwd); } catch { return { status: 'missing', target }; }
   const commit = (text.match(/\b[0-9a-f]{7,40}\b/) || [])[0] || null, date = (text.match(/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?/) || [])[0] || null;
   let ref = null, fallback = false;
   if (commit && await gitOk(['cat-file', '-e', `${commit}^{commit}`], cwd) && await gitOk(['merge-base', '--is-ancestor', commit, target], cwd)) ref = commit;
   else if (date) { try { ref = await gitRun(['rev-list', '-1', `--before=${date}`, target], cwd) || null; fallback = !!ref; } catch {} }
   if (!ref) return { status: 'unknown', target, commit, date };
-  const out = await gitRun(['diff', '--name-status', '--no-renames', ref, target, '--', '.', ':(exclude)docs/squad'], cwd, 30000);
+  // A monorepo subfolder: only its files count, with paths relative to it (--relative).
+  const out = await gitRun(['diff', '--name-status', '--no-renames', ...(sub ? [`--relative=${sub}`] : []), ref, target, '--', sub || '.', `:(exclude)${at('docs/squad')}`], cwd, 30000);
   const files = out ? out.split('\n').map(l => { const [s, ...p] = l.split('\t'); return { s: s.charAt(0), path: p.join('\t') }; }) : [];
-  const tops = async r => new Set((await gitRun(['ls-tree', '--name-only', r], cwd).catch(() => '')).split('\n').filter(Boolean));
+  const tops = async r => new Set((await gitRun(['ls-tree', '--name-only', sub ? `${r}:${sub}` : r], cwd).catch(() => '')).split('\n').filter(Boolean));
   const [before, after] = files.length ? await Promise.all([tops(ref), tops(target)]) : [new Set(), new Set()];
   // Top-level folders that appeared or went away, seen through the changed files (docs/squad is out of the diff).
   const top = f => f.path.split('/')[0];
@@ -339,10 +416,11 @@ function mapPromptNote(m) {
 
 /** The commander's plan of a linked operation gets docs/squad/mapa.md from the base branch (or the clone, before the merge). */
 async function mapForPlan(root, repo) {
-  let target = baseRef(repo), text = await gitRun(['show', `${target}:docs/squad/mapa.md`], root).catch(() => '');
-  if (!text) { target = 'HEAD'; text = await gitRun(['show', 'HEAD:docs/squad/mapa.md'], root).catch(() => ''); }
+  const file = repoPath(repo, 'docs/squad/mapa.md');
+  let target = baseRef(repo), text = await gitRun(['show', `${target}:${file}`], root).catch(() => '');
+  if (!text) { target = 'HEAD'; text = await gitRun(['show', `HEAD:${file}`], root).catch(() => ''); }
   if (!text) return '\n\n## Mapa do repositório\nAinda não há docs/squad/mapa.md: não indique arquivos.';
-  const m = await mapStatus(root, target).catch(() => null);
+  const m = await mapStatus(root, target, repo.subdir).catch(() => null);
   return `\n\n## Mapa do repositório (docs/squad/mapa.md)\n${text.length > 20000 ? text.slice(0, 20000) + '\n[...]' : text}${mapPromptNote(m)}`;
 }
 
@@ -364,6 +442,13 @@ async function mergeState(root, branch, target) {
   for (const c of commits) if (await gitOk(['diff', '--quiet', c, branch, '--', ...changed], root)) return { exists: true, merged: true, how: 'content', at: c.slice(0, 12) };
   return { exists: true, merged: false };
 }
+/** Web page of a remote's branch: GitHub's tree page, the https address for other hosts, null for ssh elsewhere or a local folder. */
+function webUrl(remote, branch) {
+  const gh = String(remote).match(/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
+  if (gh) return `https://github.com/${gh[1]}/${gh[2]}/tree/${branch}`;
+  const m = String(remote).match(/^https:\/\/([^/\s]+\/[^\s]+?)(?:\.git)?\/?$/);
+  return m ? `https://${m[1]}` : null;
+}
 /** Pull request page for GitHub origins (https or ssh); null for anything else, such as a local folder. */
 function prUrl(origin, base, branch) {
   const m = String(origin).match(/^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
@@ -374,16 +459,17 @@ function prUrl(origin, base, branch) {
  * features (mapRef: reconnaissance, map update) it first writes docs/squad/.reconhecimento with the base commit the worktree started
  * from and the date. The repository's own hooks run (no --no-verify): a refused commit is reported and the changes stay for the next step. */
 async function commitStep(run) {
-  const c = run.stepCommit;
+  const c = run.stepCommit, at = path.join(c.dir, ...subdirParts(c.repo));
   try {
-    if (c.mapRef && fs.existsSync(path.join(c.dir, 'docs', 'squad'))) {
+    if (c.mapRef && fs.existsSync(path.join(at, 'docs', 'squad'))) {
       let base = ''; try { base = fs.readFileSync(startMark(c.root, c.slug), 'utf8').trim(); } catch {}
       if (!/^[0-9a-f]{40}$/.test(base)) base = await gitRun(['merge-base', 'HEAD', baseRef(c.repo)], c.dir).catch(() => '');
       // Rewritten only when the reference changes, so a step with nothing new leaves no commit.
-      const file = path.join(c.dir, MAP_FILE), cur = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+      const file = path.join(at, MAP_FILE), cur = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
       if (/^[0-9a-f]{40}$/.test(base) && !cur.startsWith(`commit=${base}\n`)) fs.writeFileSync(file, `commit=${base}\nbranch_base=${c.repo.baseBranch || 'HEAD'}\ndata=${new Date().toISOString()}\n`);
     }
-    await gitRun(['add', '-A'], c.dir, 60000);
+    // A monorepo operation commits only its subfolder.
+    await gitRun(['add', '-A', '--', c.repo?.subdir || '.'], c.dir, 60000);
     if (await gitOk(['diff', '--cached', '--quiet'], c.dir)) return pushEvent(run, { type: 'bridge', subtype: 'commit', commit: null });
     const files = (await gitRun(['diff', '--cached', '--name-only'], c.dir)).split('\n').filter(Boolean);
     const who = await gitRun(['config', 'user.email'], c.dir).catch(() => '');
@@ -397,7 +483,7 @@ async function commitStep(run) {
  * the target, and the approved conventions only describe where the code is today. Approved = docs/squad/convencoes.md on the base branch
  * (merged after review), never a draft from a worktree. */
 async function conventionsNote(root, repo, mode) {
-  const text = await gitRun(['show', `${baseRef(repo)}:docs/squad/convencoes.md`], root).catch(() => '');
+  const text = await gitRun(['show', `${baseRef(repo)}:${repoPath(repo, 'docs/squad/convencoes.md')}`], root).catch(() => '');
   const body = text.length > 15000 ? text.slice(0, 15000) + '\n[...]' : text;
   if (mode === 'repo') return text
     ? `\n\n## Padrão de código desta operação: o do repositório\nA pessoa escolheu seguir o padrão que o código já tem. As convenções abaixo foram aprovadas pelo time (docs/squad/convencoes.md na branch base) e prevalecem sobre o guia de convenções das suas instruções: do guia, siga só o que não conflitar com elas e registre na entrega o que deixou de seguir por conflito.\n\n${body}`
@@ -517,7 +603,6 @@ function validateRunOptions(o = {}) {
     const repo = loadRepos().repos.find(r => r.id === o.repo.trim());
     if (!repo) throw new Error(`Repositório não cadastrado: ${o.repo.trim().slice(0, 80)}. Cadastre-o em ${REPOS_FILE}.`);
     out.repo = repo;
-    out.disallowedTools = [...new Set([...out.disallowedTools, 'Bash(git push:*)'])];
     // A feature step works in that feature's worktree (ensureWorktree); plans and chats stay in the clone.
     out.withMap = o.withMap === true;
     // Feature steps: map features get .reconhecimento from the bridge; the others, the operation's code standard.
@@ -529,6 +614,9 @@ function validateRunOptions(o = {}) {
       out[k] = o[k];
     }
   } else if (o.feature) throw new Error('O worktree por feature vale só para operações com repositório vinculado.');
+  // A new project's feature step (no linked repository) is committed by the bridge in the operation folder, like a linked one.
+  out.commit = o.commit === true && !!out.projectRun && !out.repo;
+  if (out.projectRun) out.disallowedTools = [...new Set([...out.disallowedTools, 'Bash(git push:*)'])];
   out.addDirs = (Array.isArray(o.addDirs) ? o.addDirs : []).map(String).map(s => s.trim()).filter(Boolean).slice(0, 10).map(d => path.resolve(d));
   out.addDirs = out.addDirs.map(d => fs.existsSync(d) ? longPath(d) : d);
   for (const d of out.addDirs) if (!fs.existsSync(d)) throw new Error(`Diretório adicional inexistente: ${d}`);
@@ -580,8 +668,14 @@ async function startRun(body) {
   let prep = null;
   if (opts.repo) {
     prep = { root: opts.cwd, clone: await checkProjectClone(opts.cwd, opts.repo), feature: opts.feature || null, base: opts.featureBase && opts.featureBase !== opts.feature ? opts.featureBase : null };
-    if (prep.feature) opts.cwd = path.join(prep.root, WT_DIR, prep.feature);
-  } else if (opts.projectRun) await ensureProjectRepo(opts.cwd);
+    // A monorepo operation works in its subfolder: of the feature's worktree, or of the clone for plans and chats.
+    if (prep.feature) opts.cwd = path.join(prep.root, WT_DIR, prep.feature, ...subdirParts(opts.repo));
+    else if (opts.repo.subdir) opts.cwd = path.join(prep.root, ...subdirParts(opts.repo));
+  } else if (opts.projectRun) {
+    await ensureProjectRepo(opts.cwd);
+    // A new project sent to its remote (/api/publish) has an origin: the agents still never push.
+    if (await gitRun(['config', '--get', 'remote.origin.url'], opts.cwd).catch(() => '')) await guardClone(opts.cwd);
+  }
 
   const id = crypto.randomUUID();
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-prompts', 'none'];
@@ -627,6 +721,7 @@ async function startRun(body) {
     // Without a database yet (direct API use before the setup), the run still works but stays out of the history.
     meta: dbModule.runMeta(body.meta), project: typeof body.options?.project === 'string' ? body.options.project.slice(0, 80) : '', persist: !!store, saved: 0, pending: [], flushTimer: null,
   };
+  if (opts.commit) run.stepCommit = { dir: opts.cwd, root: opts.cwd, slug: '', repo: null, mapRef: false, label: run.label };
   runs.set(id, run);
   if (run.persist) try { store.insertRun(run); } catch (e) { run.persist = false; console.warn(`Histórico da execução ${id} não gravado: ${e.message}`); }
   if (!prep) launchRun(run, resolved, args, opts, prompt);
@@ -643,11 +738,14 @@ async function prepareRun(run, opts, prep) {
   try {
     if (prep.clone !== 'ready') { say('clone', `Clonando o repositório ${opts.repo.name}.`); await cloneProject(prep.root, opts.repo, prep.clone, track); }
     await guardClone(prep.root);
+    const sub = opts.repo.subdir, missingSub = `A subpasta ${sub} não existe no repositório ${opts.repo.name}${opts.repo.baseBranch ? ` (branch ${opts.repo.baseBranch})` : ''}.`;
+    if (sub && !fs.existsSync(path.join(prep.root, ...subdirParts(opts.repo)))) throw new Error(missingSub);
     // The commander plans with the map (and what changed since it), so it can point each colleague to real paths.
     if (opts.withMap && !run.cancelled) run.promptExtra = await mapForPlan(prep.root, opts.repo).catch(() => '');
     if (run.cancelled || !prep.feature) return !run.cancelled;
     const wt = await ensureWorktree(prep.root, opts.repo, prep.feature, prep.base, track, say);
     if (run.cancelled) return false;
+    if (sub && !fs.existsSync(path.join(wt.dir, ...subdirParts(opts.repo)))) throw new Error(missingSub);
     let prepared = null;
     if (opts.repo.prepare && !fs.existsSync(preparedMark(prep.root, prep.feature))) {
       say('prepare', `Preparando o worktree: ${opts.repo.prepare}`);
@@ -660,8 +758,8 @@ async function prepareRun(run, opts, prep) {
     // What changed since the map, from git: on the base branch, or in the worktree while the map is not merged yet. The step's
     // prompt gets the list, so the agent reads those files instead of scanning the repository.
     try {
-      let m = await mapStatus(prep.root, baseRef(opts.repo));
-      if (m.status === 'missing') m = await mapStatus(wt.dir, 'HEAD');
+      let m = await mapStatus(prep.root, baseRef(opts.repo), sub);
+      if (m.status === 'missing') m = await mapStatus(wt.dir, 'HEAD', sub);
       pushEvent(run, { type: 'bridge', subtype: 'map', ...m });
       run.promptExtra = mapPromptNote(m);
     } catch (e) { pushEvent(run, { type: 'bridge', subtype: 'map', status: 'error', error: e.message }); }
@@ -849,6 +947,43 @@ async function handle(req, res) {
       if (Number.isInteger(n) && n >= 1 && n <= 8) maxConcurrent = n;
       return json(res, 200, { ok: true, maxConcurrent });
     }
+    // Repository registry (Configurações > Repositórios): GET /api/repos, PUT|DELETE /api/repos/<id>.
+    if (parts[1] === 'repos' && parts.length === 2 && req.method === 'GET') return json(res, 200, { ok: true, ...reposListing() });
+    if (parts[1] === 'repos' && parts.length === 3 && (req.method === 'PUT' || req.method === 'DELETE')) {
+      const id = decodeURIComponent(parts[2]);
+      if (req.method === 'PUT') { const created = saveRepoEntry(id, await readBody(req)); return json(res, created ? 201 : 200, { ok: true, created, ...reposListing() }); }
+      const file = readReposFile(), i = file.list.findIndex(r => String(r?.id || '').trim() === id);
+      if (i < 0) return fail(res, 404, 'Repositório não cadastrado.');
+      file.list.splice(i, 1); writeReposFile(file, file.list);
+      return json(res, 200, { ok: true, ...reposListing() });
+    }
+    // A new project (no linked repository) goes to the remote the person named: POST /api/publish/<folder> {remote}. The bridge
+    // pushes the folder's current branch (its steps are committed by the bridge); the agents never push (guardClone).
+    if (parts[1] === 'publish' && req.method === 'POST' && parts.length === 3) {
+      const body = await readBody(req), remote = String(body.remote || '').trim();
+      if (CRED_URL_RE.test(remote)) return fail(res, 400, 'Não coloque usuário, senha ou token na URL: o git usa o seu gerenciador de credenciais.');
+      if (!REPO_URL_RE.test(remote) && !(path.isAbsolute(remote) && fs.existsSync(remote))) return fail(res, 400, 'Informe a URL do repositório remoto (https://, ssh:// ou git@) ou a pasta de um repositório local.');
+      const root = projectDir(parts[2]);
+      if (!fs.existsSync(path.join(root, '.git'))) return fail(res, 404, 'A operação ainda não tem repositório: execute uma etapa antes de enviar.');
+      const dir = longPath(root);
+      if (!await gitOk(['rev-parse', '--verify', '-q', 'HEAD'], dir)) return fail(res, 409, 'Ainda não há commits para enviar: execute uma etapa (o bridge commita cada uma).');
+      // A linked operation's clone has the registered repository as origin: its branches go with Enviar branch.
+      const origin = await gitRun(['config', '--get', 'remote.origin.url'], dir).catch(() => '');
+      if (origin && await gitRun(['config', '--get', 'squad.publish'], dir).catch(() => '') !== 'true') return fail(res, 409, 'A pasta da operação é clone de um repositório vinculado: envie as branches com Enviar branch.');
+      if (origin !== remote) {
+        await gitRun(['config', 'remote.origin.url', remote], dir);
+        await gitRun(['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'], dir);
+      }
+      await gitRun(['config', 'squad.publish', 'true'], dir);
+      await guardClone(dir);
+      const branch = await gitRun(['symbolic-ref', '--short', 'HEAD'], dir).catch(() => '');
+      if (!BRANCH_RE.test(branch)) return fail(res, 409, 'A pasta da operação não está numa branch.');
+      // The origin's push URL is disabled for the agents: the bridge pushes to the URL itself, with its mark.
+      try { await gitRun(['push', '-q', remote, `HEAD:refs/heads/${branch}`], dir, 180000, null, { SQUAD_BRIDGE_PUSH: '1' }); }
+      catch (e) { return fail(res, 502, `git push falhou: ${e.message}`); }
+      const dirty = !!await gitRun(['status', '--porcelain'], dir).catch(() => '');
+      return json(res, 200, { ok: true, branch, commit: await gitRun(['rev-parse', '--short', 'HEAD'], dir), dirty, web: webUrl(remote, branch), local: !REPO_URL_RE.test(remote) });
+    }
     // Map freshness of a linked operation: GET /api/map/<project folder>?repo=<id>[&fetch=1] ('no-clone' before its first run).
     if (parts[1] === 'map' && req.method === 'GET' && parts.length === 3) {
       const repo = loadRepos().repos.find(r => r.id === url.searchParams.get('repo'));
@@ -862,7 +997,7 @@ async function handle(req, res) {
       if (branches.some(b => !BRANCH_NAME_RE.test(b))) return fail(res, 400, 'Branch inválida.');
       const merges = {};
       for (const b of branches) merges[b] = await mergeState(dir, b, baseRef(repo));
-      return json(res, 200, { ok: true, fetched, ...await mapStatus(dir, baseRef(repo)), merges });
+      return json(res, 200, { ok: true, fetched, ...await mapStatus(dir, baseRef(repo), repo.subdir), merges });
     }
     // Paths the commander suggested in a plan, checked on the base branch before the person approves it:
     // POST /api/paths/<folder> {repo, paths}. checked:false before the first clone.
@@ -876,7 +1011,7 @@ async function handle(req, res) {
       let target = baseRef(repo);
       if (!await gitOk(['rev-parse', '--verify', '-q', `${target}^{commit}`], dir)) target = 'HEAD';
       const exists = {};
-      for (const p of paths) exists[p] = !!p && !p.startsWith('/') && !p.includes(':') && !/(^|\/)\.\.(\/|$)/.test(p) && await gitOk(['cat-file', '-e', `${target}:${p}`], dir);
+      for (const p of paths) exists[p] = !!p && !p.startsWith('/') && !p.includes(':') && !/(^|\/)\.\.(\/|$)/.test(p) && await gitOk(['cat-file', '-e', `${target}:${repoPath(repo, p)}`], dir);
       return json(res, 200, { ok: true, checked: true, target, exists });
     }
     // Export of a linked operation into a new branch of its clone, for the team to review as a pull request:
@@ -890,7 +1025,7 @@ async function handle(req, res) {
       if (!fs.existsSync(path.join(root, '.git'))) return fail(res, 404, 'A operação ainda não tem clone: rode a F00 antes de exportar para o repositório.');
       const dir = longPath(root), slug = `exportacao-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}`;
       await guardClone(dir);
-      const wt = await ensureWorktree(dir, repo, slug, null, undefined, () => {});
+      const wt = await ensureWorktree(dir, repo, slug, null, undefined, () => {}), at = path.join(wt.dir, ...subdirParts(repo));
       const OWN = /^(docs\/squad\/|\.claude\/agents\/squad-[^/]+$|\.claude\/commands\/squad-[^/]+$)/, MAP = /^docs\/squad\/(mapa\.md|arquitetura\.md|convencoes\.md|comandos\.md|\.reconhecimento)$/;
       const written = [], unchanged = [], skipped = [];
       let claudeMd = null;
@@ -898,7 +1033,7 @@ async function handle(req, res) {
         for (const f of (Array.isArray(body.files) ? body.files : []).slice(0, 3000)) {
           const name = String(f?.name || ''), data = typeof f?.data === 'string' ? f.data : '';
           const safe = name && !name.startsWith('/') && !/[\\:]/.test(name) && !/(^|\/)\.\.?(\/|$)/.test(name);
-          const file = safe && path.join(wt.dir, name);
+          const file = safe && path.join(at, name);
           if (name === 'CLAUDE.md') { if (fs.existsSync(file)) { claudeMd = 'exists'; continue; } claudeMd = 'created'; }
           else if (!safe || !OWN.test(name) || MAP.test(name)) { skipped.push(name.slice(0, 200)); continue; }
           // Line endings do not count (a Windows checkout may have CRLF where the export has LF).
@@ -909,7 +1044,7 @@ async function handle(req, res) {
         }
         let commit = null;
         if (written.length) {
-          const spec = ['docs/squad', '.claude/agents', '.claude/commands', 'CLAUDE.md'].filter(x => fs.existsSync(path.join(wt.dir, x)));
+          const spec = ['docs/squad', '.claude/agents', '.claude/commands', 'CLAUDE.md'].filter(x => fs.existsSync(path.join(at, x))).map(x => repoPath(repo, x));
           await gitRun(['add', '-A', '--', ...spec], wt.dir, 60000);
           // Nothing staged after all (git normalized the files back): nothing new, no branch.
           if (await gitOk(['diff', '--cached', '--quiet'], wt.dir)) unchanged.push(...written.splice(0));

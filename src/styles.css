@@ -1628,3 +1628,32 @@ body:not(.reduce-motion) .at-tile.leaving,.at-tile.leaving{animation:at-leave .4
 @media (max-width:1100px){.at{grid-template-columns:minmax(0,1fr) 6px min(var(--at-side,340px),60vw)}.at-agenda{display:none}}
 @media (max-width:900px){.at{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,40dvh) minmax(0,1fr);grid-template-areas:"bar" "stage" "side"}.at-split{display:none}.at-bar{flex-wrap:wrap;gap:8px 12px;padding:8px 12px}.at-actions{margin-left:auto}.at-side{border-left:0;border-top:1px solid #ffffff14}.at-stage{padding:10px}.at-tile-face{height:62%}.at-screen-head{padding-right:12px}.at-unshare{position:static;margin:8px 12px 0;align-self:flex-start}}
 @media (max-width:560px){.at-tiles,.at-tiles[data-n],.at-stage[data-mode="share"] .at-tiles{grid-template-columns:repeat(var(--n,4),minmax(0,1fr));grid-auto-rows:minmax(0,1fr)}.at-plate small,.at-brand small{display:none}.at-tabs button{padding:0 9px}.at-actions .btn.primary{padding:6px 9px}}
+/* Nova operação, passo CÓDIGO: projeto novo (remoto opcional) ou repositório existente (com ou sem reconhecimento). */
+.op-code{display:grid;gap:10px}
+.op-code-opt{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;background:#0a0f12;border:1px solid #ffffff1a;cursor:pointer;text-transform:none;letter-spacing:0}
+.op-code-opt:has(input:checked){border-color:#30c5e866;background:#0b171b}
+.op-code-opt.off{opacity:.5;cursor:not-allowed}
+.op-code-opt input{accent-color:var(--cyan);margin-top:3px;flex-shrink:0}
+.op-code-opt strong{display:block;font:600 14px/1.2 var(--sans);color:var(--ink)}
+.op-code-opt small{display:block;margin-top:5px;font-size:11px;line-height:1.5;color:var(--muted)}
+.op-code-sub{display:none;padding:2px 0 6px 28px}
+.op-code:has(input[name=kind][value=new]:checked) .op-code-sub[data-for=new],.op-code:has(input[name=kind][value=existing]:checked) .op-code-sub[data-for=existing]{display:grid;gap:10px}
+.op-code-recon{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+@media(max-width:560px){.op-code-recon{grid-template-columns:1fr}.op-code-sub{padding-left:0}}
+/* Briefing: reconhecimento e padrão de código só com repositório vinculado; o remoto só em projeto novo (segue o select, antes de salvar). */
+#projectForm:has(#projectRepo option[value=""]:checked) .if-linked{display:none}
+#projectForm:not(:has(#projectRepo option[value=""]:checked)) .if-new{display:none}
+.link-button{background:none;border:0;padding:0;color:var(--cyan);font:inherit;text-decoration:underline;cursor:pointer}
+/* Configurações > Repositórios */
+.repo-list{display:grid;gap:6px}
+.repo-row{display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid #ffffff15;background:#ffffff05}
+.repo-row>div{flex:1;min-width:0}
+.repo-row strong{font-size:12px;font-weight:550;color:#d7e2e7}
+.repo-row code{font:9px var(--mono);color:#7e97a5;margin-left:6px}
+.repo-row small{display:block;margin-top:3px;font:10px/1.6 var(--mono);color:#7e97a5;overflow-wrap:anywhere}
+.repo-row em{display:block;font-style:normal;font-size:10px;color:#d7b77b}
+.repo-row.bad{border-color:#8f7e4e66}
+.repo-add{justify-self:start;margin-top:6px}
+.repo-form{margin-top:18px;padding-top:18px;border-top:1px solid #ffffff15}
+.repo-form-actions{gap:8px;margin-top:14px;justify-content:flex-end}
+@media(max-width:560px){.repo-row{flex-wrap:wrap}}
