@@ -217,7 +217,8 @@ async function checkProjectClone(dir, repo) {
 }
 async function cloneProject(dir, repo, state, track) {
   if (state === 'reinit') fs.rmSync(path.join(dir, '.git'), { recursive: true, force: true });
-  try { await gitRun(['clone', '-q', ...(repo.baseBranch ? ['--branch', repo.baseBranch] : []), '--', repo.source, dir], PROJECTS_DIR, 600000, track); }
+  // Windows: worktrees (<clone>/.wt/<feature>/...) easily pass the 260-character path limit; core.longpaths lifts it in Git for Windows.
+  try { await gitRun(['clone', '-q', '-c', 'core.longpaths=true', ...(repo.baseBranch ? ['--branch', repo.baseBranch] : []), '--', repo.source, dir], PROJECTS_DIR, 600000, track); }
   catch (e) { throw new Error(e.code === 'ENOENT' ? 'Git não encontrado: instale o Git para vincular um repositório existente.' : `git clone de ${repo.id} falhou: ${e.message}`); }
 }
 /* Agents never push, whatever the command looks like (git -C . push, sh -c, another remote): the clone's origin has no push URL,
@@ -228,6 +229,7 @@ const NO_PUSH_URL = 'no-push://squad-code-use-enviar-branch';
 const PRE_PUSH = '#!/bin/sh\n# SQUAD/CODE: os agentes não enviam branches; use "Enviar branch" no app.\n[ "$SQUAD_BRIDGE_PUSH" = "1" ] && exit 0\necho "SQUAD/CODE: push bloqueado. Use Enviar branch no app." >&2\nexit 1\n';
 async function guardClone(root) {
   await gitRun(['config', 'remote.origin.pushurl', NO_PUSH_URL], root).catch(() => {});
+  await gitRun(['config', 'core.longpaths', 'true'], root).catch(() => {}); // clones made before cloneProject set it
   const hook = path.join(root, '.git', 'hooks', 'pre-push');
   try { if (!fs.existsSync(hook) || fs.readFileSync(hook, 'utf8') !== PRE_PUSH) { fs.mkdirSync(path.dirname(hook), { recursive: true }); fs.writeFileSync(hook, PRE_PUSH, { mode: 0o755 }); } } catch {}
 }
@@ -266,7 +268,11 @@ async function ensureWorktree(root, repo, slug, baseSlug, track, say) {
       await gitRun(['worktree', 'add', '-q', '-b', branch, dir, start], root, 120000, track);
       try { fs.writeFileSync(startMark(root, slug), await gitRun(['rev-parse', `${start}^{commit}`], root)); } catch {}
     }
-  } catch (e) { throw new Error(e.code === 'ENOENT' ? 'Git não encontrado.' : `Não foi possível criar o worktree ${slug}: ${e.message}`); }
+  } catch (e) {
+    // A half-made worktree folder would make the next attempt fail too; the branch, if created, is reused then.
+    if (!fs.existsSync(path.join(dir, '.git'))) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} await gitRun(['worktree', 'prune'], root).catch(() => {}); }
+    throw new Error(e.code === 'ENOENT' ? 'Git não encontrado.' : `Não foi possível criar o worktree ${slug}: ${e.message}`);
+  }
   return { dir, branch, notes, created: true };
 }
 /** Runs the repository's prepare command in a new worktree, its output going to onOutput as it comes. null = nothing to prepare. */
@@ -362,6 +368,41 @@ async function mergeState(root, branch, target) {
 function prUrl(origin, base, branch) {
   const m = String(origin).match(/^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
   return m ? `https://github.com/${m[1]}/${m[2]}/compare/${base ? `${base}...` : ''}${branch}?expand=1` : null;
+}
+
+/* After a successful feature step of a linked operation the bridge commits the worktree, so agents need neither git nor a shell. On map
+ * features (mapRef: reconnaissance, map update) it first writes docs/squad/.reconhecimento with the base commit the worktree started
+ * from and the date. The repository's own hooks run (no --no-verify): a refused commit is reported and the changes stay for the next step. */
+async function commitStep(run) {
+  const c = run.stepCommit;
+  try {
+    if (c.mapRef && fs.existsSync(path.join(c.dir, 'docs', 'squad'))) {
+      let base = ''; try { base = fs.readFileSync(startMark(c.root, c.slug), 'utf8').trim(); } catch {}
+      if (!/^[0-9a-f]{40}$/.test(base)) base = await gitRun(['merge-base', 'HEAD', baseRef(c.repo)], c.dir).catch(() => '');
+      // Rewritten only when the reference changes, so a step with nothing new leaves no commit.
+      const file = path.join(c.dir, MAP_FILE), cur = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+      if (/^[0-9a-f]{40}$/.test(base) && !cur.startsWith(`commit=${base}\n`)) fs.writeFileSync(file, `commit=${base}\nbranch_base=${c.repo.baseBranch || 'HEAD'}\ndata=${new Date().toISOString()}\n`);
+    }
+    await gitRun(['add', '-A'], c.dir, 60000);
+    if (await gitOk(['diff', '--cached', '--quiet'], c.dir)) return pushEvent(run, { type: 'bridge', subtype: 'commit', commit: null });
+    const files = (await gitRun(['diff', '--cached', '--name-only'], c.dir)).split('\n').filter(Boolean);
+    const who = await gitRun(['config', 'user.email'], c.dir).catch(() => '');
+    await gitRun([...(who ? [] : ['-c', 'user.name=SQUAD/CODE', '-c', 'user.email=squad-code@localhost']), 'commit', '-q', '-m', `SQUAD/CODE: ${c.label || c.slug}`], c.dir, 120000);
+    pushEvent(run, { type: 'bridge', subtype: 'commit', commit: await gitRun(['rev-parse', '--short', 'HEAD'], c.dir), files: files.slice(0, 60), total: files.length });
+  } catch (e) { pushEvent(run, { type: 'bridge', subtype: 'commit', commit: null, error: e.message }); }
+}
+
+/* The operation's code standard (conventions option, feature steps of a linked operation), always the person's choice:
+ * 'repo' = the repository's approved conventions prevail over the agent's guide; 'squad' = the agent's guide (the squad's DIRETRIZES) is
+ * the target, and the approved conventions only describe where the code is today. Approved = docs/squad/convencoes.md on the base branch
+ * (merged after review), never a draft from a worktree. */
+async function conventionsNote(root, repo, mode) {
+  const text = await gitRun(['show', `${baseRef(repo)}:docs/squad/convencoes.md`], root).catch(() => '');
+  const body = text.length > 15000 ? text.slice(0, 15000) + '\n[...]' : text;
+  if (mode === 'repo') return text
+    ? `\n\n## Padrão de código desta operação: o do repositório\nA pessoa escolheu seguir o padrão que o código já tem. As convenções abaixo foram aprovadas pelo time (docs/squad/convencoes.md na branch base) e prevalecem sobre o guia de convenções das suas instruções: do guia, siga só o que não conflitar com elas e registre na entrega o que deixou de seguir por conflito.\n\n${body}`
+    : '\n\n## Padrão de código desta operação: o do repositório\nA pessoa escolheu seguir o padrão que o código já tem, mas ainda não há convenções aprovadas (docs/squad/convencoes.md não está na branch base). Siga o padrão dos arquivos que tocar; o guia das suas instruções vale onde o código não mostrar um padrão.';
+  return `\n\n## Padrão de código desta operação: as diretrizes da squad\nA pessoa escolheu levar o código, aos poucos, para o guia de convenções das suas instruções. Nesta operação o guia prevalece sobre o padrão existente, inclusive sobre a regra do guia de seguir o padrão do repositório. Aplique-o no que a tarefa tocar e não reescreva o que ela não pede.${text ? `\nComo o código está hoje, segundo as convenções aprovadas pelo time (só como contexto, para saber o que está migrando):\n\n${body}` : ''}`;
 }
 
 /** Folder of a project under PROJECTS_DIR; the name is a plain slug, so it cannot leave the root. */
@@ -479,6 +520,9 @@ function validateRunOptions(o = {}) {
     out.disallowedTools = [...new Set([...out.disallowedTools, 'Bash(git push:*)'])];
     // A feature step works in that feature's worktree (ensureWorktree); plans and chats stay in the clone.
     out.withMap = o.withMap === true;
+    // Feature steps: map features get .reconhecimento from the bridge; the others, the operation's code standard.
+    out.mapRef = o.mapRef === true;
+    out.conventions = ['repo', 'squad'].includes(o.conventions) ? o.conventions : '';
     for (const k of ['feature', 'featureBase']) {
       if (o[k] === undefined || o[k] === null || o[k] === '') continue;
       if (typeof o[k] !== 'string' || !FOLDER_RE.test(o[k])) throw new Error(`Identificador de feature inválido: ${String(o[k]).slice(0, 80)}`);
@@ -621,6 +665,8 @@ async function prepareRun(run, opts, prep) {
       pushEvent(run, { type: 'bridge', subtype: 'map', ...m });
       run.promptExtra = mapPromptNote(m);
     } catch (e) { pushEvent(run, { type: 'bridge', subtype: 'map', status: 'error', error: e.message }); }
+    if (opts.conventions && !opts.mapRef) run.promptExtra = (run.promptExtra || '') + await conventionsNote(prep.root, opts.repo, opts.conventions);
+    run.stepCommit = { dir: wt.dir, root: prep.root, slug: prep.feature, repo: opts.repo, mapRef: opts.mapRef, label: run.label };
     return true;
   } catch (e) {
     if (!run.cancelled) endRun(run, { isError: true, error: e.message });
@@ -660,9 +706,11 @@ function launchRun(run, resolved, args, opts, prompt) {
   child.stderr.on('data', chunk => { stderrTail = (stderrTail + chunk).slice(-4000); pushEvent(run, { type: 'stderr', text: chunk.slice(0, 4000) }); });
   child.on('error', err => { stderrTail += err.message; });
   child.on('close', code => {
+    clearTimeout(run.timer);
     if (buffer.trim()) { try { const evt = JSON.parse(buffer); if (evt.type === 'result') run.result = evt; pushEvent(run, evt); } catch { pushEvent(run, { type: 'raw', text: buffer.slice(0, 4000) }); } }
-    const r = run.result || {};
-    endRun(run, { code, isError: code !== 0 || !!r.is_error, error: (r.is_error && r.result) || stderrTail.trim().slice(-1500) || `claude saiu com código ${code}` });
+    const r = run.result || {}, end = () => endRun(run, { code, isError: code !== 0 || !!r.is_error, error: (r.is_error && r.result) || stderrTail.trim().slice(-1500) || `claude saiu com código ${code}` });
+    // A successful step of a linked operation's feature is committed by the bridge before the run ends.
+    if (run.stepCommit && code === 0 && !r.is_error && !run.cancelled && !run.timedOut) commitStep(run).finally(end); else end();
   });
 
   child.stdin.on('error', () => {});

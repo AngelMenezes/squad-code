@@ -335,6 +335,10 @@ No briefing da operação, escolha o repositório em **REPOSITÓRIO EXISTENTE**.
 - O clone, o `git fetch`, o worktree e o `prepare` são a fase de **preparo** da etapa: o chat mostra o passo em andamento
   ("está preparando o worktree"), o console mostra a saída do comando ao vivo e **Encerrar** interrompe o preparo. Se o
   `prepare` falhar, a etapa termina com o erro e o agente não começa; a próxima execução tenta preparar de novo.
+- **O bridge faz o commit de cada etapa.** Ao fim de cada etapa concluída, o bridge faz o commit do que o agente mudou
+  na branch da feature, com a mensagem `SQUAD/CODE: <agente> / <feature>`. Os agentes não precisam de git nem de
+  shell. Os hooks do repositório rodam normalmente: se um deles recusar o commit, o chat da operação avisa e as
+  mudanças ficam no worktree para a próxima etapa.
 - Ao **aprovar** a entrega, o worktree é removido e a branch `squad/<feature>` continua no clone. Se houver mudanças sem
   commit, o worktree fica e o app avisa.
 - **A feature aprovada fica "aguardando merge".** As features que dependem dela só rodam depois que a branch chegar à
@@ -355,9 +359,19 @@ No briefing da operação, escolha o repositório em **REPOSITÓRIO EXISTENTE**.
   servidor: ative a **proteção da branch base** no GitHub (exigir pull request) nos repositórios que vincular.
   Repositórios com `core.hooksPath` próprio (como o husky) ignoram esse hook, e aí vale só o bloqueio do `origin`.
 - A F00 deixa de ser o setup e vira **Reconhecimento do projeto**. Ela mapeia o código em `docs/squad/` (mapa,
-  arquitetura, convenções, comandos e o commit de referência em `.reconhecimento`) e preenche os campos ainda vazios da
-  documentação do projeto (visão, escopo, glossário, arquitetura e ADRs). Enquanto o mapa não chega à branch base, as
-  features seguintes partem da branch da F00, para já terem `docs/squad/`.
+  arquitetura, convenções e comandos) e preenche os campos ainda vazios da documentação do projeto (visão, escopo,
+  glossário, arquitetura e ADRs). Nas features de mapa (a F00 e as atualizações do mapa), os agentes só podem escrever
+  em `docs/squad/`, mesmo os que não têm a ferramenta Write no perfil, e o bridge grava o commit de referência em
+  `docs/squad/.reconhecimento`.
+- **Padrão de código da operação** (no briefing), uma escolha sua por operação:
+  - **Seguir o padrão do repositório:** as convenções aprovadas pelo time (`docs/squad/convencoes.md` na branch base,
+    ou seja, depois do merge da F00) prevalecem sobre as diretrizes dos agentes. Das diretrizes, vale só o que não
+    conflita com elas.
+  - **Aplicar as diretrizes da squad, migrando aos poucos:** as diretrizes dos agentes prevalecem, e as convenções
+    atuais vão só como contexto, para o agente saber o que está migrando sem reescrever o que a tarefa não pede.
+
+  O rascunho do `convencoes.md` que ainda não foi mergeado nunca conta: o que um agente escreve só vale depois que o
+  time revisa no pull request.
 - Até a documentação ficar completa, a execução roda só a F00, que precisa apenas de nome, briefing e squad. Depois
   disso, as features seguintes leem `docs/squad/` em vez de varrer o código a cada execução.
 

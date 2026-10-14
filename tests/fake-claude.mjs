@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Stand-in for `claude` used by bridge tests: mimics `claude -p --output-format stream-json`.
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
@@ -32,6 +33,8 @@ process.stdin.on('end', () => {
   }
   if (input.includes('SLEEP')) { setTimeout(() => {}, 60_000); return; }
   if (input.includes('FAIL')) { process.stderr.write('fake failure\n'); emit({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'fake failure', session_id: 'fake-session' }); process.exit(1); }
+  // WRITE:<path> in the prompt: write that file in the cwd, as an agent's edit would.
+  for (const [, file] of input.matchAll(/WRITE:([\w./-]+)/g)) { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, `escrito pelo agente: ${file}\n`); }
   emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'README.md' } }] } });
   if (args.includes('--include-partial-messages')) for (const text of ['wor', 'king']) emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } });

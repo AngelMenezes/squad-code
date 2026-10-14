@@ -853,3 +853,65 @@ test('export of a linked operation goes to a new branch with only the squad plac
     assert.equal(gitIn(root, 'branch', '--list', 'squad/exportacao-*').split('\n').filter(Boolean).length, 1);
   } finally { rmSync(reposFile, { force: true }); }
 });
+
+test('Windows: a worktree whose paths pass 260 characters is created (core.longpaths), and a failed one leaves no half folder', { skip: process.platform !== 'win32' }, async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.longpaths=true', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main');
+  const deep = Array.from({ length: 5 }, (_, i) => `pasta-bem-comprida-numero-${i}-${'x'.repeat(30)}`).join('/');
+  mkdirSync(path.join(src, deep), { recursive: true }); writeFileSync(path.join(src, deep, 'arquivo.py'), 'print(1)\n');
+  gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'fundo');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'deep', path: src, baseBranch: 'main' }] }));
+  const folder = 'op-070-deep', wt = path.join(projectsRoot, folder, '.wt', 'f01-aaaaaa');
+  try {
+    assert.ok(path.join(wt, deep, 'arquivo.py').length > 260);
+    const events = await collect((await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: folder, repo: 'deep', feature: 'f01-aaaaaa' } }) })).json()).runId);
+    assert.equal(events.at(-1).status, 'done', JSON.stringify(events.at(-1)));
+    assert.ok(existsSync(path.join(wt, deep, 'arquivo.py')));
+  } finally { rmSync(reposFile, { force: true }); }
+});
+
+test('the bridge commits each linked step and writes .reconhecimento itself; the code standard note uses the approved conventions only', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main');
+  mkdirSync(path.join(src, 'docs', 'squad'), { recursive: true });
+  writeFileSync(path.join(src, 'app.py'), 'print(1)\n'); writeFileSync(path.join(src, 'docs', 'squad', 'convencoes.md'), '# Convenções aprovadas\nsnake_case\n');
+  gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'init');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'commits', path: src, baseBranch: 'main' }] }));
+  const folder = 'op-080-commits', root = path.join(projectsRoot, folder);
+  const step = async (feature, prompt, extra = {}) => {
+    const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt, label: `PROPHET / ${feature.slice(0, 3).toUpperCase()}`, options: { project: folder, repo: 'commits', feature, ...extra } }) });
+    assert.equal(res.status, 201, await res.clone().text());
+    const events = await collect((await res.json()).runId);
+    return { commit: events.find(e => e.subtype === 'commit'), exit: events.at(-1) };
+  };
+  try {
+    // Reconnaissance step: the agent writes the map; the bridge writes .reconhecimento with the start commit and commits it all.
+    const base = gitIn(src, 'rev-parse', 'HEAD');
+    const recon = await step('f00-aaaaaa', 'mapear WRITE:docs/squad/mapa.md', { mapRef: true });
+    assert.equal(recon.exit.status, 'done');
+    assert.deepEqual(recon.commit.files.sort(), ['docs/squad/.reconhecimento', 'docs/squad/mapa.md']);
+    assert.equal(gitIn(root, 'log', '-1', '--format=%s', 'squad/f00-aaaaaa'), 'SQUAD/CODE: PROPHET / F00');
+    assert.match(gitIn(root, 'show', 'squad/f00-aaaaaa:docs/squad/.reconhecimento'), new RegExp(`^commit=${base}\\nbranch_base=main\\ndata=\\d{4}-`));
+    // A step that changes nothing commits nothing; a later step commits only its own work.
+    assert.equal((await step('f00-aaaaaa', 'conferir', { mapRef: true })).commit.commit, null);
+    const feature = await step('f01-bbbbbb', 'implementar WRITE:src/novo.py', { conventions: 'repo' });
+    assert.deepEqual(feature.commit.files, ['src/novo.py']);
+    // Code standard: the approved conventions (base branch) prevail in 'repo'; in 'squad' they are only context. A draft in the
+    // worktree never counts.
+    const wt = path.join(root, '.wt', 'f01-bbbbbb');
+    writeFileSync(path.join(wt, 'docs', 'squad', 'convencoes.md'), '# Rascunho do agente\n');
+    const repoNote = (await step('f01-bbbbbb', 'x', { conventions: 'repo' })).exit.result;
+    assert.match(repoNote, /## Padrão de código desta operação: o do repositório[\s\S]*prevalecem sobre o guia[\s\S]*# Convenções aprovadas/);
+    assert.ok(!repoNote.includes('Rascunho do agente'));
+    const squadNote = (await step('f01-bbbbbb', 'x', { conventions: 'squad' })).exit.result;
+    assert.match(squadNote, /## Padrão de código desta operação: as diretrizes da squad[\s\S]*o guia prevalece[\s\S]*só como contexto[\s\S]*# Convenções aprovadas/);
+    // Map steps get no code standard note.
+    assert.ok(!(await step('f00-aaaaaa', 'x', { mapRef: true, conventions: 'repo' })).exit.result.includes('Padrão de código desta operação'));
+  } finally { rmSync(reposFile, { force: true }); }
+});

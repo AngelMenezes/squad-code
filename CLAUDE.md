@@ -87,7 +87,13 @@ creation and kept). Agents never push: `guardClone` (before every linked run) se
 writes the `PRE_PUSH` hook, which only lets a push through with `SQUAD_BRIDGE_PUSH=1`; `POST /api/branches/:folder/push {repo,
 branch}` (`BRANCH_NAME_RE`, person-initiated) pushes to the origin's fetch URL with that mark and returns `pr` (`prUrl`, GitHub
 origins) and `local`. `POST /api/paths/:folder {repo, paths}` checks paths on the base branch (`git cat-file -e`; unsafe ones are
-false; `checked:false` before the clone). `withMap: true` (plan runs) appends
+false; `checked:false` before the clone). A successful feature step of a linked operation is committed by the bridge before the run
+ends (`commitStep` from the close handler, `run.stepCommit` set by `prepareRun`; `git add -A`, message `SQUAD/CODE: <label>`, the
+person's git identity or SQUAD/CODE, the repository's hooks run; `bridge`/`commit` event with the files, `commit:null` when nothing
+changed, `error` when refused). With `mapRef` (map features) it first writes `docs/squad/.reconhecimento` (`commit=<startMark>`,
+`branch_base`, `data`) when `docs/squad` exists, only if the reference changed. With `conventions: 'repo'|'squad'` (other feature
+steps) `conventionsNote` appends the operation's code standard, built from `docs/squad/convencoes.md` on the base branch only (the
+approved one, never the worktree's draft). `withMap: true` (plan runs) appends
 `docs/squad/mapa.md` from the base, or the clone, plus the change list (`mapForPlan`). `/api/health` sends `repos` (`publicRepos`: ids,
 names, branches, errors; never the path or URL). An explicit `cwd` stays as a fallback
 (tests, direct API use); a run with neither `project` nor `cwd` is refused (never `process.cwd()`, the app folder). The step prompt
@@ -268,8 +274,13 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   (`applyReconDocs`, ADRs only when there are none). `runGate(p, f)`: while that F00 is pending and the documentation is incomplete
   (`reconOnly`), runs take F00 alone and need only name, briefing and squad (`reconGaps`); `startRun`, `openSpawn`/`spawnAgent` and the
   commander chat follow it. Later steps of a linked operation are told to read `docs/squad` before exploring (`buildStepPrompt`).
-  Every step of a linked operation (`executeLiveStep`, spawn included) sends `feature: featureSlug(f)` (key + id tail, stable across
-  renames) and `featureBase` (the F00's), so it runs in that feature's worktree; the room and the console show the `worktree` event
+  Every step of a linked operation (`executeLiveStep`, spawn included) goes through `linkedStepOptions`: `feature: featureSlug(f)` (key
+  + id tail, stable across renames) and `featureBase` (the F00's), so it runs in that feature's worktree; map features (recon F00,
+  `mapUpdate`) add `mapRef`, `permissionMode: 'dontAsk'`, Write/Edit in `tools` and only `Write(docs/squad/**)`/`Edit(docs/squad/**)` in
+  `allowedTools` (plain write tools removed), so even an agent without Write writes there and nowhere else; the other features send
+  `conventions` = `project.codeStandard` ('repo' default | 'squad'; persisted, PADRÃO DE CÓDIGO in `repoFieldHTML`). The prompts say
+  the bridge commits and writes `.reconhecimento` (no git asked of agents), and `commanderPlanPrompt` lists each colleague's tools;
+  the console shows the `commit` event and the room only a refused commit; the room and the console show the `worktree` event
   and the preparing phase (`prepare` steps as the typing line, `PREP_TYPING`, and a note for the prepare command; `prepare-log` in the console),
   and `approveFeature` asks the bridge to remove the worktree (the branch stays for the PR). The operation page keeps the map state
   in `ui.mapStatus` (transient; `mapCheck` from the features head render and "Verificar", and every step's `map` event against the
