@@ -374,6 +374,28 @@ bridge compara esse commit com a branch base usando o git, sem gastar tokens:
 **Verificar**, no aviso, atualiza a branch base (`git fetch`) e compara de novo. Se o commit registrado sumiu do
 histórico, o bridge usa a data gravada no mapa para achar o commit equivalente.
 
+**Exportar sem sobrescrever o que o time já tem.** Num repositório vinculado, o botão **Exportar** da operação grava só
+nos lugares da squad, e todas as referências entre os arquivos acompanham a mudança:
+
+| Exportação comum | Repositório vinculado |
+|---|---|
+| `CLAUDE.md` | `docs/squad/CLAUDE.squad.md` |
+| `docs/project`, `docs/architecture`, `docs/standards`, `docs/features` | as mesmas pastas dentro de `docs/squad/` |
+| `.claude/agents/<agente>.md` | `.claude/agents/squad-<agente>.md` |
+| `.claude/commands/<comando>.md` (`/executar-feature`…) | `.claude/commands/squad-<comando>.md` (`/squad-executar-feature`…) |
+| `.claude/settings.json` | `docs/squad/settings.squad.json` (sugestão: copie para o `.claude/settings.json` só as regras aprovadas) |
+
+Há duas formas de exportar:
+- **Gravar numa branch:** o bridge cria uma branch `squad/exportacao-<data>` no clone, com um commit, para o time
+  revisar o diff no pull request. Os arquivos do mapa (`mapa.md`, `arquitetura.md`, `convencoes.md`, `comandos.md`,
+  `.reconhecimento`) nunca são tocados. Se nada mudou desde a última exportação mergeada, nenhuma branch é criada.
+  A branch vai para a origem com **Enviar branch**, como as das features.
+- **Baixar .zip:** os mesmos arquivos, para extrair na raiz do repositório.
+
+Para o Claude Code carregar a squad, o `CLAUDE.md` do repositório precisa da linha `@docs/squad/CLAUDE.squad.md`. Na
+exportação por branch, ela é criada automaticamente quando o repositório não tem `CLAUDE.md`; quando já tem, o arquivo
+do time não é alterado e o app avisa para você incluir a linha.
+
 O vínculo só pode ser escolhido enquanto a operação ainda não tem nenhuma entrega, e a página nunca recebe o caminho
 ou a URL do repositório, só o `id` e o nome.
 

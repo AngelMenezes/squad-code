@@ -809,3 +809,47 @@ test('merges: the plan gets the map, a branch is pushed by the person, and merge
     assert.equal((await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, withMap: true } }) })).status, 201);
   } finally { rmSync(reposFile, { force: true }); }
 });
+
+test('export of a linked operation goes to a new branch with only the squad places; team files and the map stay untouched', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  const put = (cwd, file, text) => { mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true }); writeFileSync(path.join(cwd, file), text); };
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main');
+  // What the team already has.
+  for (const [f, text] of [['CLAUDE.md', '# Time\n'], ['.claude/settings.json', '{"time":true}\n'], ['.claude/agents/reviewer.md', 'time\n'], ['docs/squad/mapa.md', '# Mapa\n']]) put(src, f, text);
+  gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'init');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'export', path: src, baseBranch: 'main' }] }));
+  const folder = 'op-060-export', root = path.join(projectsRoot, folder);
+  const files = [
+    { name: 'docs/squad/CLAUDE.squad.md', data: '# Squad\n' }, { name: 'docs/squad/features/001-x/spec.md', data: 'spec\n' },
+    { name: '.claude/agents/squad-prophet.md', data: 'agente\n' }, { name: '.claude/commands/squad-executar-feature.md', data: 'cmd\n' },
+    { name: 'CLAUDE.md', data: '@docs/squad/CLAUDE.squad.md\n' }, { name: '.claude/settings.json', data: '{}' },
+    { name: '.claude/agents/reviewer.md', data: 'squad\n' }, { name: 'docs/squad/mapa.md', data: 'sobrescrito\n' },
+    { name: '../fora.md', data: 'x' }, { name: 'docs/squad/../../escape.md', data: 'x' },
+  ];
+  const exp = () => api(`/api/export/${folder}`, { method: 'POST', body: JSON.stringify({ repo: 'export', operation: 'OP-060 Export', files }) });
+  try {
+    assert.equal((await exp()).status, 404); // no clone yet
+    await collect((await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: folder, repo: 'export' } }) })).json()).runId);
+    const r = await (await exp()).json();
+    assert.match(r.branch, /^squad\/exportacao-\d{14}$/);
+    assert.deepEqual(r.written.sort(), ['.claude/agents/squad-prophet.md', '.claude/commands/squad-executar-feature.md', 'docs/squad/CLAUDE.squad.md', 'docs/squad/features/001-x/spec.md']);
+    assert.deepEqual(r.skipped.sort(), ['../fora.md', '.claude/agents/reviewer.md', '.claude/settings.json', 'docs/squad/../../escape.md', 'docs/squad/mapa.md']);
+    assert.equal(r.claudeMd, 'exists');
+    const show = file => gitIn(root, 'show', `${r.branch}:${file}`);
+    assert.deepEqual([show('CLAUDE.md'), show('.claude/settings.json'), show('.claude/agents/reviewer.md'), show('docs/squad/mapa.md')], ['# Time', '{"time":true}', 'time', '# Mapa']);
+    assert.equal(show('.claude/agents/squad-prophet.md'), 'agente');
+    assert.ok(!existsSync(path.join(root, '.wt', r.branch.slice(6))));
+    assert.ok(!existsSync(path.join(path.dirname(projectsRoot), 'escape.md')));
+    // The person sends it; once the team merges it, the same export has nothing new and leaves no branch behind.
+    assert.equal((await (await api(`/api/branches/${folder}/push`, { method: 'POST', body: JSON.stringify({ repo: 'export', branch: r.branch }) })).json()).ok, true);
+    gitIn(src, 'merge', '-q', '--no-ff', '-m', 'PR exportação', r.branch);
+    await new Promise(res => setTimeout(res, 1100)); // a new timestamp for the next branch name
+    const again = await (await exp()).json();
+    assert.equal(again.branch, null);
+    assert.equal(again.written.length, 0);
+    assert.equal(gitIn(root, 'branch', '--list', 'squad/exportacao-*').split('\n').filter(Boolean).length, 1);
+  } finally { rmSync(reposFile, { force: true }); }
+});

@@ -288,6 +288,14 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   `CLAUDE.md`, `docs/{project,architecture,standards,features/<NNN-slug>}` and `.claude/{agents,commands,settings.json}`.
   `docs/standards` is compiled from the squad's DIRETRIZES (`STANDARD_FILES`); simulated-only progress exports as
   `backlog`. The DIRETRIZES catalog paths (ADR/PRD/C4) follow the same `docs/` layout.
+  A linked operation (`repoId`) never exports over the team's files: `openLinkedExport` offers a `.zip` (`exportLinkedZip`) or a
+  branch (`exportLinkedBranch` → `POST /api/export/:folder`), both from `linkedExportFiles`, which moves every file to the squad's
+  places (`docs/squad/CLAUDE.squad.md`, `docs/squad/{project,...}`, `.claude/agents/squad-*`, `.claude/commands/squad-*`,
+  `docs/squad/settings.squad.json`, plus `docs/squad/LEIA-ME.md`) and rewrites the references in the texts to match (root-relative
+  links in the squad file). The bridge writes them in a new `squad/exportacao-<timestamp>` worktree (only those places; the map
+  files are never written; `CLAUDE.md` = `SQUAD_IMPORT` only when the repository has none), commits, removes the worktree and drops
+  the branch when nothing changed (line endings ignored). `showExportResult` reports it and **Enviar branch** goes through
+  `pushSquadBranch` (shared with the merge notice).
 - Features carry `route` (ordered agent ids) built by `routeFor`, which maps scopes to roles with
   `ROLE_FAMILY` (e.g. node/java/dotnet cover the backend step). A finished route sends the feature to
   human review; only approval marks it done and unblocks dependents.

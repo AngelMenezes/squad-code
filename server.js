@@ -831,6 +831,54 @@ async function handle(req, res) {
       for (const p of paths) exists[p] = !!p && !p.startsWith('/') && !p.includes(':') && !/(^|\/)\.\.(\/|$)/.test(p) && await gitOk(['cat-file', '-e', `${target}:${p}`], dir);
       return json(res, 200, { ok: true, checked: true, target, exists });
     }
+    // Export of a linked operation into a new branch of its clone, for the team to review as a pull request:
+    // POST /api/export/<folder> {repo, operation, files:[{name, data}]}. Only the squad's own places are written (docs/squad,
+    // .claude/agents/squad-*, .claude/commands/squad-*), the map files stay with the agents, and CLAUDE.md is written only when the
+    // repository has none. A branch with nothing new is dropped.
+    if (parts[1] === 'export' && req.method === 'POST' && parts.length === 3) {
+      const body = await readBody(req, 16 * 1024 * 1024), repo = loadRepos().repos.find(r => r.id === body.repo);
+      if (!repo) return fail(res, 400, 'Repositório não cadastrado.');
+      const root = projectDir(parts[2]);
+      if (!fs.existsSync(path.join(root, '.git'))) return fail(res, 404, 'A operação ainda não tem clone: rode a F00 antes de exportar para o repositório.');
+      const dir = longPath(root), slug = `exportacao-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}`;
+      await guardClone(dir);
+      const wt = await ensureWorktree(dir, repo, slug, null, undefined, () => {});
+      const OWN = /^(docs\/squad\/|\.claude\/agents\/squad-[^/]+$|\.claude\/commands\/squad-[^/]+$)/, MAP = /^docs\/squad\/(mapa\.md|arquitetura\.md|convencoes\.md|comandos\.md|\.reconhecimento)$/;
+      const written = [], unchanged = [], skipped = [];
+      let claudeMd = null;
+      try {
+        for (const f of (Array.isArray(body.files) ? body.files : []).slice(0, 3000)) {
+          const name = String(f?.name || ''), data = typeof f?.data === 'string' ? f.data : '';
+          const safe = name && !name.startsWith('/') && !/[\\:]/.test(name) && !/(^|\/)\.\.?(\/|$)/.test(name);
+          const file = safe && path.join(wt.dir, name);
+          if (name === 'CLAUDE.md') { if (fs.existsSync(file)) { claudeMd = 'exists'; continue; } claudeMd = 'created'; }
+          else if (!safe || !OWN.test(name) || MAP.test(name)) { skipped.push(name.slice(0, 200)); continue; }
+          // Line endings do not count (a Windows checkout may have CRLF where the export has LF).
+          if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n') === data.replace(/\r\n/g, '\n')) { unchanged.push(name); continue; }
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          fs.writeFileSync(file, data, 'utf8');
+          written.push(name);
+        }
+        let commit = null;
+        if (written.length) {
+          const spec = ['docs/squad', '.claude/agents', '.claude/commands', 'CLAUDE.md'].filter(x => fs.existsSync(path.join(wt.dir, x)));
+          await gitRun(['add', '-A', '--', ...spec], wt.dir, 60000);
+          // Nothing staged after all (git normalized the files back): nothing new, no branch.
+          if (await gitOk(['diff', '--cached', '--quiet'], wt.dir)) unchanged.push(...written.splice(0));
+          else {
+            const who = await gitRun(['config', 'user.email'], wt.dir).catch(() => '');
+            await gitRun([...(who ? [] : ['-c', 'user.name=SQUAD/CODE', '-c', 'user.email=squad-code@localhost']), 'commit', '-q', '-m', `SQUAD/CODE: exportação da operação ${String(body.operation || '').slice(0, 80)}`.trim()], wt.dir, 60000);
+            commit = await gitRun(['rev-parse', '--short', 'HEAD'], wt.dir);
+          }
+        }
+        await removeWorktree(dir, slug).catch(() => {});
+        if (!commit) await gitRun(['branch', '-D', wt.branch], dir).catch(() => {});
+        return json(res, 200, { ok: true, branch: commit ? wt.branch : null, commit, written, unchanged, skipped, claudeMd });
+      } catch (e) {
+        await removeWorktree(dir, slug).catch(() => {});
+        throw e;
+      }
+    }
     // The person sends an approved feature's branch to the clone's origin (agents never push): POST /api/branches/<folder>/push
     // {repo, branch}. GitHub origins get the pull request link.
     if (parts[1] === 'branches' && parts[3] === 'push' && req.method === 'POST' && parts.length === 4) {
