@@ -1657,3 +1657,16 @@ body:not(.reduce-motion) .at-tile.leaving,.at-tile.leaving{animation:at-leave .4
 .repo-form{margin-top:18px;padding-top:18px;border-top:1px solid #ffffff15}
 .repo-form-actions{gap:8px;margin-top:14px;justify-content:flex-end}
 @media(max-width:560px){.repo-row{flex-wrap:wrap}}
+/* Configurações > Ambiente: ferramentas encontradas nesta máquina; aviso de ambiente incompleto na operação. */
+.env-list{display:grid;gap:6px}
+.env-row{display:grid;grid-template-columns:20px minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:9px 12px;border:1px solid #ffffff15;background:#ffffff05}
+.env-row .env-state{display:flex}.env-row .env-state .icon{width:14px;height:14px;color:var(--cyan)}
+.env-row.miss{border-color:#8f7e4e66}.env-row.miss .env-state .icon{color:#d7b77b}
+.env-row strong{display:block;font-size:12px;font-weight:550;color:#d7e2e7}
+.env-row small{display:block;font:10px/1.6 var(--mono);color:#7e97a5;overflow-wrap:anywhere}
+.env-row code{font:10px var(--mono);color:#9fb3bd}
+.env-row a{font-size:10px;color:var(--cyan);white-space:nowrap}
+.env-list>.hint{padding:4px 0 0}
+.env-refresh{margin-top:10px}
+.ops-env a{color:var(--cyan)}.ops-env code{font:10px var(--mono)}
+@media(max-width:560px){.env-row{grid-template-columns:20px minmax(0,1fr)}.env-row code,.env-row a{grid-column:2}}

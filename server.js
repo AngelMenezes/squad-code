@@ -531,6 +531,60 @@ async function claudeVersion(bin) {
   return info;
 }
 
+/* Development tools on this machine (GET /api/toolchains[?refresh=1]): what the code the squad writes will need to build and run, for
+ * any stack. Each tool is detected by running its version command (the app never installs anything) and the result is cached for
+ * TOOL_TTL. Runs with withEnv get the list at the end of their prompt (envNote), so the squad pins versions that exist here and reports
+ * what is missing instead of pretending. A launcher without the tool (only the .NET runtime, the Windows Store python alias) is missing. */
+const TOOLCHAINS = [
+  { id: 'git', name: 'Git', bins: ['git'], args: ['--version'], re: /(\d+\.\d+\.\d+)/, check: 'git --version', url: 'https://git-scm.com/downloads' },
+  { id: 'node', name: 'Node.js', bins: ['node'], args: ['--version'], re: /v?(\d+\.\d+\.\d+)/, check: 'node --version', url: 'https://nodejs.org/pt-br/download' },
+  { id: 'python', name: 'Python', bins: ['python', 'python3', 'py'], args: ['--version'], re: /Python (\d+\.\d+\.\d+)/, check: 'python --version', url: 'https://www.python.org/downloads/' },
+  { id: 'dotnet', name: '.NET SDK', bins: ['dotnet'], args: ['--list-sdks'], re: /^(\d+\.\d+\.\d+\S*)\s/gm, all: true, check: 'dotnet --list-sdks', url: 'https://dotnet.microsoft.com/pt-br/download', none: 'Só o runtime do .NET: nenhum SDK instalado.' },
+  { id: 'java', name: 'Java (JDK)', bins: ['javac'], args: ['-version'], re: /javac (\d[\w.+-]*)/, check: 'javac -version', url: 'https://adoptium.net/pt-BR/' },
+  { id: 'go', name: 'Go', bins: ['go'], args: ['version'], re: /go(\d+\.\d+(?:\.\d+)?)/, check: 'go version', url: 'https://go.dev/dl/' },
+  { id: 'flutter', name: 'Flutter (com Dart)', bins: ['flutter'], args: ['--version'], re: /Flutter (\d+\.\d+\.\d+)/, check: 'flutter --version', url: 'https://docs.flutter.dev/get-started/install', timeout: 90000 },
+  { id: 'rust', name: 'Rust (cargo)', bins: ['cargo'], args: ['--version'], re: /cargo (\d+\.\d+\.\d+)/, check: 'cargo --version', url: 'https://www.rust-lang.org/tools/install' },
+  { id: 'docker', name: 'Docker', bins: ['docker'], args: ['--version'], re: /version (\d+\.\d+\.\d+)/, check: 'docker --version', url: 'https://docs.docker.com/get-started/get-docker/' },
+];
+const TOOL_TTL = 10 * 60 * 1000;
+let toolCache = null, toolPending = null;
+function runVersion(resolved, args, timeout) {
+  return new Promise(resolve => {
+    let out = '', child;
+    try { child = spawnBin(resolved, args, { windowsHide: true, env: { ...process.env, DOTNET_NOLOGO: '1', DOTNET_CLI_TELEMETRY_OPTOUT: '1' } }); }
+    catch (e) { return resolve({ code: -1, out: e.message }); }
+    const timer = setTimeout(() => { killTree(child); resolve({ code: -1, out: `sem resposta em ${Math.round(timeout / 1000)} s` }); }, timeout);
+    child.stdout.on('data', d => { out += d; }); child.stderr.on('data', d => { out += d; });
+    child.on('error', e => { clearTimeout(timer); resolve({ code: -1, out: e.message }); });
+    child.on('close', code => { clearTimeout(timer); resolve({ code, out }); });
+  });
+}
+async function detectTool(t) {
+  const base = { id: t.id, name: t.name, check: t.check, url: t.url };
+  let error = 'Não encontrado no PATH.';
+  for (const bin of t.bins) {
+    const resolved = await resolveBin(bin);
+    if (!resolved) continue;
+    const r = await runVersion(resolved, t.args, t.timeout || 20000);
+    const versions = t.all ? [...r.out.matchAll(t.re)].map(m => m[1]) : [(r.out.match(t.re) || [])[1]].filter(Boolean);
+    if (r.code === 0 && versions.length) return { ...base, found: true, version: versions.at(-1), ...(t.all ? { versions } : {}), path: resolved };
+    error = r.code === 0 ? t.none || 'Versão não reconhecida.' : (r.out.trim().split(/\r?\n/)[0] || `saiu com código ${r.code}`).slice(0, 200);
+  }
+  return { ...base, found: false, error };
+}
+function toolchains(refresh = false) {
+  if (!refresh && toolCache && Date.now() - toolCache.at < TOOL_TTL) return Promise.resolve(toolCache.data);
+  if (toolPending) return toolPending;
+  toolPending = Promise.all(TOOLCHAINS.map(t => detectTool(t).catch(e => ({ id: t.id, name: t.name, check: t.check, url: t.url, found: false, error: e.message }))))
+    .then(tools => { const data = { checkedAt: new Date().toISOString(), platform: process.platform, tools }; toolCache = { at: Date.now(), data }; return data; })
+    .finally(() => { toolPending = null; });
+  return toolPending;
+}
+function envNote(data) {
+  const have = data.tools.filter(t => t.found), miss = data.tools.filter(t => !t.found);
+  return `\n\n## Ferramentas instaladas nesta máquina\nO bridge verificou: ${have.map(t => `${t.name} ${t.versions?.length > 1 ? t.versions.join(', ') : t.version}`).join('; ') || 'nenhuma das ferramentas conhecidas'}.${miss.length ? ` Não encontradas: ${miss.map(t => t.name).join(', ')}.` : ''}\nAo fixar versões (SDK, runtime, global.json, engines, go.mod, pubspec, imagens...), use as que existem aqui. Se a solução pedir uma ferramenta não encontrada, não finja que ela existe: escreva o código mesmo assim e registre no relatório o que a pessoa precisa instalar, com o link oficial e o comando de verificação. O README do projeto deve listar os pré-requisitos com as versões usadas.`;
+}
+
 function killTree(child) {
   if (!child || child.exitCode !== null || child.killed) return;
   if (IS_WIN) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
@@ -625,6 +679,8 @@ function validateRunOptions(o = {}) {
   // Squad colleagues the agent may call with the Agent tool (--agents file) and their text in the stream (--forward-subagent-text).
   out.agents = validateAgents(o.agents);
   out.forwardSubagents = o.forwardSubagents === true;
+  // The tools installed on this machine at the end of the prompt (plans and feature steps).
+  out.withEnv = o.withEnv === true;
   const timeout = Number(o.timeoutSec); out.timeoutSec = Number.isFinite(timeout) && timeout >= 10 && timeout <= 7200 ? timeout : 900;
   return out;
 }
@@ -677,6 +733,7 @@ async function startRun(body) {
     if (await gitRun(['config', '--get', 'remote.origin.url'], opts.cwd).catch(() => '')) await guardClone(opts.cwd);
   }
 
+  const envText = opts.withEnv ? envNote(await toolchains()) : '';
   const id = crypto.randomUUID();
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-prompts', 'none'];
   let sysFile = null, settingsFile = null, agentsFile = null;
@@ -716,7 +773,7 @@ async function startRun(body) {
   const run = {
     id, status: 'running', phase: prep ? 'preparing' : 'running', startedAt: new Date().toISOString(), endedAt: null, label: String(body.label || '').slice(0, 200),
     cwd: opts.cwd, args: args.map(a => a === sysFile ? '<system-prompt-file>' : a === settingsFile ? '<settings-file>' : a === agentsFile ? '<agents-file>' : a), child: null, prepChild: null, events: [], clients: new Set(),
-    result: null, sysFile, settingsFile, agentsFile, timer: null, cancelled: false,
+    result: null, sysFile, settingsFile, agentsFile, timer: null, cancelled: false, envNote: envText,
     // History: who ran it and where (body.meta, whitelisted in db.js), saved events count and the batch waiting to be written.
     // Without a database yet (direct API use before the setup), the run still works but stays out of the history.
     meta: dbModule.runMeta(body.meta), project: typeof body.options?.project === 'string' ? body.options.project.slice(0, 80) : '', persist: !!store, saved: 0, pending: [], flushTimer: null,
@@ -812,7 +869,7 @@ function launchRun(run, resolved, args, opts, prompt) {
   });
 
   child.stdin.on('error', () => {});
-  child.stdin.end(prompt + (run.promptExtra || ''), 'utf8');
+  child.stdin.end(prompt + (run.promptExtra || '') + (run.envNote || ''), 'utf8');
 }
 
 /** Ends a run once: exit event, history, subscribers and temp files. Also for runs that end while preparing (error or cancel). */
@@ -947,6 +1004,7 @@ async function handle(req, res) {
       if (Number.isInteger(n) && n >= 1 && n <= 8) maxConcurrent = n;
       return json(res, 200, { ok: true, maxConcurrent });
     }
+    if (url.pathname === '/api/toolchains' && req.method === 'GET') return json(res, 200, { ok: true, ...await toolchains(url.searchParams.get('refresh') === '1') });
     // Repository registry (Configurações > Repositórios): GET /api/repos, PUT|DELETE /api/repos/<id>.
     if (parts[1] === 'repos' && parts.length === 2 && req.method === 'GET') return json(res, 200, { ok: true, ...reposListing() });
     if (parts[1] === 'repos' && parts.length === 3 && (req.method === 'PUT' || req.method === 'DELETE')) {

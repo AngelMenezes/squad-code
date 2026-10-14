@@ -24,11 +24,14 @@ const dataRoot = tmp('squad-data-');
 const extraDirs = [], bridges = [];
 let server, token, nextPort = PORT + 1;
 
-/** Starts a bridge on its own port with `dataDir` as the database folder; several starts on one folder test restarts. */
-async function startBridge(dataDir, port = nextPort++) {
+/** Starts a bridge on its own port with `dataDir` as the database folder; several starts on one folder test restarts. `env` adds
+ * variables; a PATH there replaces the inherited one (Windows spells it Path). */
+async function startBridge(dataDir, port = nextPort++, env = {}) {
+  const inherited = { ...process.env };
+  if (env.PATH) for (const k of Object.keys(inherited)) if (/^path$/i.test(k)) delete inherited[k];
   const proc = spawn(process.execPath, [path.join(ROOT, 'server.js'), '--port', String(port)], {
     cwd: workdir,
-    env: { ...process.env, TEMP: tempRoot, TMP: tempRoot, TMPDIR: tempRoot, SQUAD_HOME: home, SQUAD_PROJECTS_DIR: projectsRoot, SQUAD_DATA_DIR: dataDir, SQUAD_CLAUDE_BIN: path.join(ROOT, 'tests', 'fake-claude.mjs'), SQUAD_PRINT_TOKEN: '1' },
+    env: { ...inherited, TEMP: tempRoot, TMP: tempRoot, TMPDIR: tempRoot, SQUAD_HOME: home, SQUAD_PROJECTS_DIR: projectsRoot, SQUAD_DATA_DIR: dataDir, SQUAD_CLAUDE_BIN: path.join(ROOT, 'tests', 'fake-claude.mjs'), SQUAD_PRINT_TOKEN: '1', ...env },
   });
   let out = '';
   const tok = await new Promise((resolve, reject) => {
@@ -42,7 +45,8 @@ async function startBridge(dataDir, port = nextPort++) {
     proc, token: tok, base, out: () => out,
     api: (p, init = {}) => fetch(base + p, { ...init, headers: { 'content-type': 'application/json', 'x-squad-token': tok, ...(init.headers || {}) } }),
     // Windows: a hard kill (no shutdown), like closing the terminal.
-    stop: async () => { if (proc.exitCode === null) { const exited = new Promise(r => proc.once('exit', r)); proc.kill(); await exited; } },
+    // A bridge already killed has a signalCode and no exitCode: waiting for its exit again would never end.
+    stop: async () => { if (proc.exitCode === null && proc.signalCode === null) { const exited = new Promise(r => proc.once('exit', r)); proc.kill(); await exited; } },
   };
   bridges.push(b);
   return b;
@@ -1067,4 +1071,36 @@ test('a new project commits each step in its own folder and the person publishes
     await collect((await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: 'op-096-linked', repo: 'pub' } }) })).json()).runId);
     assert.equal((await publish({ remote }, 'op-096-linked')).status, 409);
   } finally { rmSync(reposFile, { force: true }); }
+});
+
+test('the tools of this machine come from their version commands, are cached, and go to plans and steps that ask (withEnv)', async () => {
+  const bin = tmp('squad-bin-'); extraDirs.push(bin);
+  const fake = (name, lines) => process.platform === 'win32'
+    ? writeFileSync(path.join(bin, `${name}.cmd`), ['@echo off', ...lines.map(l => `echo ${l}`), ''].join('\r\n'))
+    : writeFileSync(path.join(bin, name), ['#!/bin/sh', ...lines.map(l => `echo "${l}"`), ''].join('\n'), { mode: 0o755 });
+  fake('go', ['go version go1.22.1 windows/amd64']);
+  fake('dotnet', ['8.0.100 [C:\\sdk]', '9.0.200 [C:\\sdk]']);
+  fake('javac', ['algo que não é uma versão']);
+  // Only the fakes, node and the system folder (where/which): flutter, cargo and the rest are missing on Windows.
+  const sys = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32') : '/usr/bin:/bin';
+  const b = await startBridge(tmp('squad-data-env-'), undefined, { PATH: [bin, path.dirname(process.execPath), sys].join(path.delimiter) });
+  const tools = async (refresh = false) => (await (await b.api(`/api/toolchains${refresh ? '?refresh=1' : ''}`)).json()).tools;
+  const byId = list => Object.fromEntries(list.map(t => [t.id, t]));
+  let t = byId(await tools());
+  assert.deepEqual(Object.keys(t), ['git', 'node', 'python', 'dotnet', 'java', 'go', 'flutter', 'rust', 'docker']);
+  assert.deepEqual([t.go.found, t.go.version], [true, '1.22.1']);
+  assert.deepEqual([t.dotnet.version, t.dotnet.versions], ['9.0.200', ['8.0.100', '9.0.200']]);
+  assert.equal(t.node.version, process.version.slice(1));
+  assert.deepEqual([t.java.found, t.java.error], [false, 'Versão não reconhecida.']);
+  if (process.platform === 'win32') assert.deepEqual([t.flutter.found, t.flutter.error, t.flutter.url], [false, 'Não encontrado no PATH.', 'https://docs.flutter.dev/get-started/install']);
+  // Cached until a refresh.
+  fake('go', ['go version go1.23.0 windows/amd64']);
+  assert.equal(byId(await tools()).go.version, '1.22.1');
+  assert.equal(byId(await tools(true)).go.version, '1.23.0');
+  // A plan or step with withEnv gets the list at the end of its prompt; others do not.
+  const run = async options => (await collect((await (await b.api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'planejar', options: { project: 'op-097-env', ...options } }) })).json()).runId, b.base, b.token)).at(-1).result;
+  const withEnv = await run({ withEnv: true });
+  assert.match(withEnv, /## Ferramentas instaladas nesta máquina\nO bridge verificou: [^\n]*\.NET SDK 8\.0\.100, 9\.0\.200; Go 1\.23\.0[^\n]*Não encontradas: [^\n]*Java \(JDK\)/);
+  assert.match(withEnv, /não finja que ela existe/);
+  assert.ok(!(await run({})).includes('Ferramentas instaladas'));
 });

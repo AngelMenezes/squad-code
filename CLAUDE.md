@@ -106,7 +106,11 @@ the same `commitStep` in the operation folder (`run.stepCommit` with `repo: null
 `POST /api/publish/:folder {remote}` (person-initiated; `remote` = https/ssh/git@ URL without userinfo, or an existing absolute path)
 sets `origin` (marked `squad.publish`, refused with 409 on a linked clone, whose origin is the registered repository, and before the
 first commit), applies `guardClone`, pushes the current branch to the URL with `SQUAD_BRIDGE_PUSH=1` and answers `{branch, commit,
-dirty, web}` (`webUrl`); later runs of a folder with an origin get `guardClone` too. An explicit `cwd` stays as a fallback
+dirty, web}` (`webUrl`); later runs of a folder with an origin get `guardClone` too. **Toolchains:** `GET /api/toolchains[?refresh=1]`
+runs each `TOOLCHAINS` entry's version command (`resolveBin` + `spawnBin`, `detectTool`; git, node, python, dotnet SDKs, javac, go,
+flutter, cargo, docker; a launcher whose output has no version, like the .NET runtime without an SDK, counts as missing), cached for
+`TOOL_TTL` (`toolchains`); never installs anything. `withEnv: true` (plans and feature steps) appends `envNote` (found tools and
+versions, missing ones, "do not pretend") after `promptExtra` (`run.envNote`). An explicit `cwd` stays as a fallback
 (tests, direct API use); a run with neither `project` nor `cwd` is refused (never `process.cwd()`, the app folder). The step prompt
 (`buildStepPrompt`) and `CALLED_AGENT_SYSTEM` tell agents to keep every file inside the folder. The settings.json project/local scopes
 take `project=` as well.
@@ -281,6 +285,10 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   runs before it is approved. It runs in `createOperation`, `saveProject`, `saveFeature` and `normalizeWorkspace` (older workspaces
   get it in backlog; the boot then writes the database at once, `diskSync.migrated`). It cannot be deleted, dragged or moved to another
   sprint; the editor locks its sprint and shows it as a fixed dependency of new features (`featureDraftFor`). The seed's F00 is done.
+- Toolchains: `ui.toolchains` (transient, `loadToolchains` once after `checkBridge` and on `env-refresh`) feeds Configurações >
+  Ambiente (tab `env`, `renderEnvPane`) and `envNoticeHTML` in the features head: the tools whose `STACK_HINTS` match the project's
+  briefing, architecture, scope or ADRs and are not installed. `executeLiveStep` and the commander's plan send `withEnv: true`. The setup
+  F00 asks for the README's prerequisites with exact versions (`SETUP_PREV` keeps the earlier criteria/tasks for `ensureSetup`).
 - New project (no `repoId`): `executeLiveStep` sends `commit: true`, so the bridge commits each step in the operation folder.
   `project.remote` (persisted; wizard or the briefing's REPOSITÓRIO REMOTO, `.if-new`) is where **Enviar para o remoto**
   (`publishNoticeHTML` in the features head, shown once a live output exists; `publishProject` → `/api/publish`) sends it;

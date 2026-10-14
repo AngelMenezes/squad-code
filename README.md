@@ -66,6 +66,20 @@ O app tem três modos de uso:
 Requisitos do Claude Code, segundo a documentação oficial: macOS 13+, Windows 10 1809+ (ou Server 2019+),
 Ubuntu 20.04+, Debian 10+ ou Alpine 3.19+; 4 GB de RAM; conexão com a internet.
 
+### Ferramentas da linguagem do projeto que a squad vai criar
+
+O SQUAD/CODE roda com Git, Node.js e Claude Code, qualquer que seja a linguagem do projeto. Para **compilar e rodar** o
+código que a squad entregar, a máquina precisa também da ferramenta da linguagem escolhida: .NET SDK, Node.js, Python,
+JDK, Go, Flutter, Rust, Docker... O app **não instala** nenhuma delas, mas verifica o que existe:
+
+- **Configurações > Ambiente** lista o que foi encontrado nesta máquina, com a versão, o comando para conferir e o link
+  oficial de instalação do que falta. Depois de instalar, clique em **Verificar de novo**.
+- A página da operação avisa (**Ambiente incompleto**) quando o briefing, a arquitetura ou os ADRs citam uma ferramenta
+  que não está instalada.
+- O plano do comandante e cada etapa recebem essa lista: a squad usa as versões que existem na máquina (por exemplo, o
+  SDK do `global.json`) e, se faltar algo, escreve o código mesmo assim e diz no relatório o que instalar. O README do
+  projeto gerado lista os pré-requisitos com as versões usadas.
+
 ### Opcionais (somente para quem vai mexer no código)
 
 | Ferramenta | Para quê | Download |
@@ -287,6 +301,8 @@ No menu de configurações (botão **Configurações** no topo ou clique no stat
 - **Aba Claude Code:** modo (real ou demo), executável, modo de permissão (padrão `acceptEdits`), modelo e esforço
   globais, orçamento máximo por etapa (`--max-budget-usd`), tempo limite (padrão 900 s), execuções simultâneas
   (padrão 2), regras extras de `allowedTools` e `--add-dir`.
+- **Aba Ambiente:** as ferramentas de desenvolvimento encontradas nesta máquina (Git, Node.js, Python, .NET SDK, JDK, Go,
+  Flutter, Rust e Docker), com versão, comando de verificação e link de instalação do que falta.
 - **Aba Repositórios:** cadastra, edita e remove os repositórios existentes que uma operação pode usar (caminho local
   ou URL, subpasta de monorepo, branch base e comando de preparo). Grava em `data/repos.json`, sempre com uma cópia
   `.bak` antes de gravar.
