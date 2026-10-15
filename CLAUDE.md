@@ -91,7 +91,13 @@ registered repository (a local one in place, at the ref its clones start from; a
 `PROJECTS_DIR/.cache/<id>.git`): `map` (`.reconhecimento` or `mapa.md` there), `commit`, `date`, `docs` (`docs/squad/projeto.json`
 through `cleanTeamDocs`: vision, scopeIn, scopeOut, glossary, architecture, complete ADRs) and, without a map, `pending` (`squad/f00-*`
 branches on the origin, from `ls-remote`). `POST /api/team-docs/:folder {repo, feature, docs}` (`writeTeamDocs`) writes `projeto.json`
-into that feature's worktree and commits it only when it changed (409 without the worktree or `docs/squad`).
+into that feature's worktree and commits it only when it changed (409 without the worktree or `docs/squad`). **Base branch on the
+origin:** `GET /api/repos/:id/base[?refresh=1]` (`baseCheck`, `ls-remote --symref`, cached `BASE_TTL`) answers 'default' (empty
+`baseBranch`, never a warning), 'ok', 'missing' (the configured branch is gone from the origin, e.g. a release branch after the
+release) or 'unknown' (origin unreachable, never 'missing'), with `default` and `branches` (no `squad/*`, `baseOrder`: default, same
+prefix as the old branch newest first by natural order, the rest); no naming rule. `ensureWorktree` checks the clone's origin after a
+successful fetch and refuses a new feature whose base is gone (fetch does not prune, so the old copy would be used); existing
+worktrees keep running. `PUT|DELETE /api/repos/:id` drop the id's `teamMaps`/`baseChecks` cache.
 With `&branches=squad/a,...` it also answers `merges` (`mergeState`: merged by history, or by content after a squash/rebase when
 some base commit since the fork point (newest 60 touching those files) had every file the branch changed exactly as the branch has
 it, so later changes to them do not hide the merge; `empty` when the branch has no commits since `startMark`, written at worktree
@@ -332,7 +338,11 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   the bridge commits and writes `.reconhecimento` (no git asked of agents), and `commanderPlanPrompt` lists each colleague's tools (and marks map features, where everyone writes `docs/squad`);
   the console shows the `commit` event and the room only a refused commit; the room and the console show the `worktree` event
   and the preparing phase (`prepare` steps as the typing line, `PREP_TYPING`, and a note for the prepare command; `prepare-log` in the console),
-  and `approveFeature` asks the bridge to remove the worktree (the branch stays for the PR). The operation page keeps the map state
+  and `approveFeature` asks the bridge to remove the worktree (the branch stays for the PR). `ui.baseChecks[repoId]` (transient,
+`loadBaseCheck`: once per render, refreshed by `mapCheck` with fetch, and for every repository in Configurações > Repositórios, which
+marks the row and fills the BRANCH BASE `datalist`) feeds `baseNoticeHTML` in the features head (only when 'missing'): a select of
+the bridge's suggestions and **Trocar branch base** (`baseSwitch`: confirmAction listing the pending merges of every operation on
+that repository, then `PUT /api/repos/:id` with the new `baseBranch`, so it applies to all of them). The operation page keeps the map state
   in `ui.mapStatus` (transient; `mapCheck` from the features head render and "Verificar", and every step's `map` event against the
   base) and shows `mapNoticeHTML`; **Atualizar mapa** (`createMapUpdate`) adds one feature with `mapUpdate: true` (persisted, scope
   `architect`, `MAP_UPDATE_FEATURE`/`MAP_UPDATE_BRIEF`, its own section in `buildStepPrompt`) that rewrites only the affected parts

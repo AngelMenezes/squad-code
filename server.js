@@ -332,7 +332,11 @@ async function ensureWorktree(root, repo, slug, baseSlug, track, say) {
     if (await gitOk(['rev-parse', '--verify', '-q', `refs/heads/${branch}`], root)) await gitRun(['worktree', 'add', '-q', dir, branch], root, 120000, track);
     else {
       say('fetch', 'Atualizando a branch base (git fetch).');
-      try { await gitRun(['fetch', '-q', 'origin'], root, 300000, track); } catch (e) { notes.push(`git fetch falhou, a feature parte da cópia local: ${e.message}`); }
+      let fetched = true;
+      try { await gitRun(['fetch', '-q', 'origin'], root, 300000, track); } catch (e) { fetched = false; notes.push(`git fetch falhou, a feature parte da cópia local: ${e.message}`); }
+      // A base branch deleted on the origin stays in the clone (fetch does not prune): never start a feature from that old copy.
+      if (fetched && repo.baseBranch && !await gitRun(['ls-remote', '--heads', 'origin', `refs/heads/${repo.baseBranch}`], root, 30000, track).catch(() => 'unknown'))
+        throw Object.assign(new Error(`A branch base ${repo.baseBranch} não existe mais no origin de ${repo.id}. Troque a branch base (aviso da operação ou Configurações > Repositórios) antes de iniciar features novas.`), { base: true });
       let start = repo.baseBranch ? `origin/${repo.baseBranch}` : 'origin/HEAD';
       if (!await gitOk(['rev-parse', '--verify', '-q', `${start}^{commit}`], root)) start = repo.baseBranch || 'HEAD';
       if (baseSlug && !await gitOk(['cat-file', '-e', `${start}:${repoPath(repo, 'docs/squad/mapa.md')}`], root) && await gitOk(['rev-parse', '--verify', '-q', `refs/heads/squad/${baseSlug}`], root)) {
@@ -346,7 +350,7 @@ async function ensureWorktree(root, repo, slug, baseSlug, track, say) {
   } catch (e) {
     // A half-made worktree folder would make the next attempt fail too; the branch, if created, is reused then.
     if (!fs.existsSync(path.join(dir, '.git'))) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} await gitRun(['worktree', 'prune'], root).catch(() => {}); }
-    throw new Error(e.code === 'ENOENT' ? 'Git não encontrado.' : `Não foi possível criar o worktree ${slug}: ${e.message}`);
+    throw new Error(e.code === 'ENOENT' ? 'Git não encontrado.' : e.base ? e.message : `Não foi possível criar o worktree ${slug}: ${e.message}`);
   }
   return { dir, branch, notes, created: true };
 }
@@ -468,6 +472,32 @@ async function readTeamMap(repo) {
     .map(l => (l.split('\t')[1] || '').replace(/^refs\/heads\//, '')).filter(b => /^squad\/f00-[a-z0-9-]+$/.test(b)).slice(0, 10);
   const value = { map, commit: (mark.match(/\b[0-9a-f]{7,40}\b/) || [])[0]?.slice(0, 12) || null, date: (mark.match(/\d{4}-\d{2}-\d{2}/) || [])[0] || null, docs, pending, baseBranch: repo.baseBranch || '' };
   teamMaps.set(repo.id, { at: Date.now(), source: repo.source, value });
+  return value;
+}
+
+/* Base branch on the origin, whatever the team's branching model: the only signal is that a configured baseBranch is gone from the
+ * origin (a release branch deleted after the release, a renamed trunk). An empty baseBranch (the origin's default) never warns, and an
+ * origin that cannot be reached answers 'unknown', never 'missing'. branches = the origin's heads (squad/* left out) as suggestions,
+ * without any naming rule: the default branch, then the ones sharing the old branch's prefix (newest version first by natural order),
+ * then the rest. Cached BASE_TTL; ensureWorktree checks the clone's origin itself before a new feature starts. */
+const BASE_TTL = 60 * 1000;
+const baseChecks = new Map();
+function baseOrder(base, def, names) {
+  const prefix = base.includes('/') ? base.slice(0, base.lastIndexOf('/') + 1) : '', nat = (a, b) => a.localeCompare(b, 'en', { numeric: true });
+  const rank = b => b === def ? 0 : prefix && b.startsWith(prefix) ? 1 : 2;
+  return [...names].sort((a, b) => rank(a) - rank(b) || (rank(a) === 1 ? nat(b, a) : nat(a, b)));
+}
+async function baseCheck(repo, refresh = false) {
+  if (!repo.baseBranch) return { baseBranch: '', status: 'default' };
+  const hit = baseChecks.get(repo.id);
+  if (!refresh && hit && hit.source === repo.source && hit.base === repo.baseBranch && Date.now() - hit.at < BASE_TTL) return hit.value;
+  let out;
+  try { out = await gitRun(['ls-remote', '--symref', '--', repo.source, 'HEAD', 'refs/heads/*'], PROJECTS_DIR, 30000); }
+  catch (e) { return { baseBranch: repo.baseBranch, status: 'unknown', error: e.code === 'ENOENT' ? 'Git não encontrado.' : e.message }; }
+  const lines = out.split('\n'), def = ((lines.find(l => /^ref: refs\/heads\/\S+\tHEAD$/.test(l)) || '').match(/^ref: refs\/heads\/(\S+)\t/) || [])[1] || '';
+  const heads = lines.map(l => (l.match(/^[0-9a-f]{40,64}\trefs\/heads\/(.+)$/) || [])[1]).filter(b => b && BRANCH_RE.test(b));
+  const value = { baseBranch: repo.baseBranch, status: heads.includes(repo.baseBranch) ? 'ok' : 'missing', default: def, branches: baseOrder(repo.baseBranch, def, heads.filter(b => !b.startsWith('squad/'))).slice(0, 200) };
+  baseChecks.set(repo.id, { at: Date.now(), source: repo.source, base: repo.baseBranch, value });
   return value;
 }
 
@@ -1079,6 +1109,13 @@ async function handle(req, res) {
       if (repo.error) return fail(res, 400, `Repositório ${repo.id}: ${repo.error}`);
       return json(res, 200, { ok: true, ...await teamMapInfo(repo, url.searchParams.get('refresh') === '1') });
     }
+    // Base branch of a registered repository on its origin: GET /api/repos/<id>/base[?refresh=1] (baseCheck).
+    if (parts[1] === 'repos' && parts[3] === 'base' && parts.length === 4 && req.method === 'GET') {
+      const repo = loadRepos().repos.find(r => r.id === parts[2]);
+      if (!repo) return fail(res, 404, 'Repositório não cadastrado.');
+      if (repo.error) return fail(res, 400, `Repositório ${repo.id}: ${repo.error}`);
+      return json(res, 200, { ok: true, ...await baseCheck(repo, url.searchParams.get('refresh') === '1') });
+    }
     // POST /api/team-docs/<folder> {repo, feature, docs}: the approved map feature's documentation into docs/squad/projeto.json.
     if (parts[1] === 'team-docs' && req.method === 'POST' && parts.length === 3) {
       const body = await readBody(req), repo = loadRepos().repos.find(r => r.id === body.repo);
@@ -1093,6 +1130,7 @@ async function handle(req, res) {
     }
     if (parts[1] === 'repos' && parts.length === 3 && (req.method === 'PUT' || req.method === 'DELETE')) {
       const id = decodeURIComponent(parts[2]);
+      teamMaps.delete(id); baseChecks.delete(id);
       if (req.method === 'PUT') { const created = saveRepoEntry(id, await readBody(req)); return json(res, created ? 201 : 200, { ok: true, created, ...reposListing() }); }
       const file = readReposFile(), i = file.list.findIndex(r => String(r?.id || '').trim() === id);
       if (i < 0) return fail(res, 404, 'Repositório não cadastrado.');

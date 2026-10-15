@@ -970,6 +970,44 @@ test('team map: found on the base branch without a clone, its documentation goes
   } finally { rmSync(reposFile, { force: true }); }
 });
 
+test('a base branch gone from the origin is reported with suggestions, stops new features only, and any branching model works', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const git = (...a) => execFileSync('git', ['-C', src, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
+  git('init', '-q'); git('checkout', '-q', '-b', 'main');
+  writeFileSync(path.join(src, 'app.py'), 'print(1)\n'); git('add', '.'); git('commit', '-q', '-m', 'init');
+  for (const b of ['release/10.0.0-rc', 'release/9.0.0', 'hotfix/x', 'squad/f00-aaaaaa', 'develop']) git('branch', b);
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'rc', name: 'Loja', path: src, baseBranch: 'release/10.0.0-rc' }, { id: 'trunk', path: src }, { id: 'flow', path: src, baseBranch: 'develop' }] }));
+  const base = async (id, q = '?refresh=1') => (await api(`/api/repos/${id}/base${q}`)).json();
+  const step = async feature => (await collect((await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: 'op-095-rc', repo: 'rc', feature } }) })).json()).runId)).at(-1);
+  try {
+    assert.equal((await api('/api/repos/nope/base')).status, 404);
+    assert.equal((await base('trunk')).status, 'default'); // empty baseBranch: the origin's default, never a warning
+    assert.equal((await base('flow')).status, 'ok');
+    assert.equal((await base('rc')).status, 'ok');
+    assert.equal((await step('f01-aaaaaa')).status, 'done');
+    // The release is out: the rc branch is deleted, the next one exists. New features stop; the started one keeps its worktree.
+    git('branch', '-D', 'release/10.0.0-rc'); git('branch', 'release/10.1.0-rc');
+    assert.equal((await base('rc', '')).status, 'ok'); // cached
+    const b = await base('rc');
+    assert.equal(b.status, 'missing');
+    assert.equal(b.default, 'main');
+    assert.deepEqual(b.branches, ['main', 'release/10.1.0-rc', 'release/9.0.0', 'develop', 'hotfix/x']);
+    const blocked = await step('f02-bbbbbb');
+    assert.equal(blocked.status, 'error');
+    assert.match(blocked.error, /A branch base release\/10\.0\.0-rc não existe mais no origin de rc/);
+    assert.ok(!existsSync(path.join(projectsRoot, 'op-095-rc', '.wt', 'f02-bbbbbb')));
+    assert.equal((await step('f01-aaaaaa')).status, 'done');
+    // Switching the base (PUT, cache dropped) lets new features start from it.
+    const put = await api('/api/repos/rc', { method: 'PUT', body: JSON.stringify({ name: 'Loja', path: src, baseBranch: 'release/10.1.0-rc' }) });
+    assert.equal(put.status, 200, await put.clone().text());
+    assert.equal((await base('rc', '')).status, 'ok');
+    assert.equal((await step('f02-bbbbbb')).status, 'done');
+    assert.equal((await base('flow')).status, 'ok');
+  } finally { rmSync(reposFile, { force: true }); }
+});
+
 test('the repository registry is edited from the page: a folder inside a repository becomes a subfolder, URLs never carry credentials', async t => {
   try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
   const src = tmp('squad-src-'); extraDirs.push(src);

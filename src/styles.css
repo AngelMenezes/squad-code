@@ -1288,7 +1288,7 @@ select option,select optgroup{background-color:#0b1215;color:#e3eaed}
 @keyframes life-wave{0%{opacity:.85;transform:scale(.6)}100%{opacity:0;transform:scale(2.5)}}
 .ops-run-gate{align-items:center;margin:0 0 16px}.ops-run-gate>span{flex:1}.ops-run-gate strong{color:#e3d6ad;font-weight:600}
 /* Linked operations: approved features waiting for their branch to reach the base branch. */
-.ops-merge{flex-wrap:wrap}.ops-merge .merge-list{flex-basis:100%;list-style:none;margin:2px 0 0;padding:0;display:grid;gap:4px}.ops-merge .merge-list li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font:10px var(--mono);color:#b9c6cc}.ops-merge .merge-list li>span{flex:1;min-width:180px}.ops-merge .merge-list small{color:#d7b77b}.ops-merge .merge-list a{color:var(--cyan)}
+.ops-base{flex-wrap:wrap}.ops-base>span{min-width:240px}.ops-base code{font:10px var(--mono);color:#e3d6ad}.ops-base select{max-width:260px;background:#080d0f;border:1px solid #8f7e4e88;color:#e3eaed;padding:5px 8px;font-size:11px}.ops-merge{flex-wrap:wrap}.ops-merge .merge-list{flex-basis:100%;list-style:none;margin:2px 0 0;padding:0;display:grid;gap:4px}.ops-merge .merge-list li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font:10px var(--mono);color:#b9c6cc}.ops-merge .merge-list li>span{flex:1;min-width:180px}.ops-merge .merge-list small{color:#d7b77b}.ops-merge .merge-list a{color:var(--cyan)}
 /* Operation room messages (roomMsgHTML): the commander's plan, the squad talking, calls between agents and baton passes. They live
    in the operation chat (#opsChat, below), which takes the left HUD's place on the Squad map during a run. */
 .room-crew-head{font:9px var(--mono);letter-spacing:.8px;color:#7f939e;margin:0 4px 12px}
