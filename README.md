@@ -115,8 +115,8 @@ No GitLab e no Bitbucket o recurso se chama, respectivamente, *Protected branche
 ### 1. Clone o repositório
 
 ```sh
-git clone https://github.com/AngelMenezes/squad-code-network.git
-cd squad-code-network
+git clone https://github.com/AngelMenezes/squad-code.git
+cd squad-code
 ```
 
 ### 2. Confira o Node.js e instale as dependências
