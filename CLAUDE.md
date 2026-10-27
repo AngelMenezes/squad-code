@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SQUAD/CODE is a single-page web app for organizing a squad of software-development
 agents (commander, ADR/PRD "reconhecedores", operators) that execute features through headless Claude
-Code (`claude -p`). The bridge keeps the app's data in a local SQLite database (`better-sqlite3`, the only npm dependency). UI text is Portuguese (pt-BR); code identifiers are English. Git repo; `origin` is github.com/AngelMenezes/squad-code-network: every commit and push goes there.
+Code (`claude -p`). The bridge keeps the app's data in a local SQLite database (`better-sqlite3`, the only npm dependency). UI text is Portuguese (pt-BR); code identifiers are English. Git repo; `origin` is github.com/AngelMenezes/squad-code: every commit and push goes there.
 
 ## Commands
 
