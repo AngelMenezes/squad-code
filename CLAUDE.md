@@ -419,6 +419,16 @@ Retomar; `launchNext`/`scheduleStep` only move in `running`):
 - The plan card waits for the person: **Executar plano** (`roomApprove`, also the run button/space key while `awaiting`) writes
   `f.route` + `f.briefs` (persisted, aligned with the route, reset wherever the route changes) and starts; **Cancelar** is `stopRun`,
   which leaves every feature untouched (and cancels `runner.planRunId`).
+- That plan only routes features that already exist; new ones come from **Planejar próxima sprint** (commander chat option
+  `sprint`, bridge only). `c.focus.sprint` makes every turn carry `sprintPlanTask` (target sprint, next keys, the current proposal),
+  and a ```json `{"proposal":{goal, features:[{key,title,scope,priority,description,criteria,dependsOn}]}}` (`sprintProposal`, at
+  most `SPRINT_PROPOSAL_MAX`) is shown as a list (`sprintProposalMD`) with **Criar no painel** / **Pedir ajustes**; the latest one
+  lives in `c.focus.proposal`. Nothing is registered before **Criar no painel** (`applySprintProposal`, refused during a run): the
+  target (`sprintPlanTarget`) is the last sprint while none of its features started, else a new sprint; keys are reassigned from
+  `nextFeatureNumber` and a proposal key in `dependsOn` only resolves to an earlier item of it. `startRun` with nothing pending
+  (current sprint done or empty, no explicit `sprintId`) goes to `nextSprintOffer`: the commander chat opened on `sprint`
+  (`openAgentChat(id, opt)` → `agentChatStart`), or in demo a toast and the sprint editor. The kickoff prompt (`docCoWriteSystem`)
+  keeps sprints, schedule and execution status out of the documents: the briefing never registers anything.
 - The room (`ui.rooms[projectId]`, max 800 messages) is a group chat shown in the **operation chat** (`openOpsChat`, no modal): any run
   start (`beginPlan`, `spawnAgent`), the `room` action and the War Room take the person to the Squad map in the isometric office
   (`settings.squadView='office'`, `goView('network')`), where `#opsChat` (shell) takes the left HUD's place (`#workspace.ops-chat-on`

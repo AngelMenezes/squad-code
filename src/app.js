@@ -1731,7 +1731,7 @@ function docCoWriteSystem(def,a,c,turn){
   mates.length?`  - "next": o codinome de um colega (${names(mates)}) para falar logo depois de você, quando a parte dele for necessária agora; cite-o com @ no texto. No máximo um.`:'',
   pool.length?'  - "invite": [{"agent": "CODINOME", "reason": "o que ele precisa resolver"}] para chamar colegas da squad que não estão na reunião (no máximo dois); cite-os com @ no texto. Eles falam logo depois de você;':'',
   rest.length||(def.adrs&&!adrs)?`- ${teamsNames([...rest.map(label),...(def.adrs&&!adrs?['os ADRs']:[])])} são dos colegas: não mande essas chaves; se precisar deles agora, use "next".`:'',
-  '- Nas listas, escreva só o texto de cada item, sem marcadores.','- Parta do conteúdo atual dos documentos: preserve o que a pessoa escreveu e mude só o necessário. Cada valor do JSON substitui o campo inteiro.','- Use o briefing, as features e os outros documentos do projeto como contexto, sem contradizê-los.',`- Siga as suas diretrizes de ${fam==='adr'?'ADR e arquitetura':fam==='commander'?'comando':'PRD'}.`].filter(Boolean).join('\n');
+  '- Nas listas, escreva só o texto de cada item, sem marcadores.','- Parta do conteúdo atual dos documentos: preserve o que a pessoa escreveu e mude só o necessário. Cada valor do JSON substitui o campo inteiro.','- Use o briefing, as features e os outros documentos do projeto como contexto, sem contradizê-los.','- Os documentos descrevem o produto e as decisões, não a execução: não escreva sprints, cronograma, features com responsáveis nem andamento (em andamento, aprovado, datas de início) em nenhum campo. Sprints e features são propostas pelo comandante em "Planejar próxima sprint" e só existem depois de cadastradas no painel da operação; se a pessoa quiser planejar, diga isso a ela.',`- Siga as suas diretrizes de ${fam==='adr'?'ADR e arquitetura':fam==='commander'?'comando':'PRD'}.`].filter(Boolean).join('\n');
 }
 // Agenda of the meetup from the Documentos tab (filled like projectGaps checks it): top bar chips and "## Pauta" of the prompt.
 function teamsValue(field){return String(document.getElementById(FE_FIELD_ID[field])?.value||'').trim();}
@@ -1920,7 +1920,7 @@ const AGENT_CHAT_SYSTEM=['# Modo conversa no celular (SQUAD/CODE)','Você está 
 const AGENT_CHAT_MENUS={
  prd:[['ask','Tirar uma dúvida',1],['edit','Editar uma feature'],['create','Criar nova feature'],['free','Falar livremente',1]],
  adr:[['ask','Tirar uma dúvida',1],['adrs','Ver ADRs do projeto'],['adr-new','Registrar um ADR'],['review','Revisar uma feature',1],['free','Falar livremente',1]],
- commander:[['status','Status da operação'],['distribute','Distribuir features'],['run','Iniciar operação'],['reviews','Revisões pendentes'],['free','Falar livremente',1]],
+ commander:[['status','Status da operação'],['sprint','Planejar próxima sprint',1],['distribute','Distribuir features'],['run','Iniciar operação'],['reviews','Revisões pendentes'],['free','Falar livremente',1]],
  op:[['mine','Minhas features'],['spawn','Spawn individual'],['ask','Tirar uma dúvida técnica',1],['free','Falar livremente',1]]
 };
 // Line above the options: after the greeting it does not ask again, it just points to the shortcuts (picked at random).
@@ -1945,13 +1945,15 @@ function agentPhoneHTML(a){
 ${liveMode()?`<div class="fe-compose"><div class="fe-pill"><textarea id="feChatInput" rows="1" maxlength="4000" placeholder="iMessage" aria-label="Mensagem para ${name}" autofocus></textarea><button type="button" class="fe-send" data-action="fe-send" aria-label="Enviar" title="Enviar (Enter)" disabled>${send}</button></div></div>`:`<div class="fe-compose offline"><p class="fe-note">As opções funcionam aqui mesmo. Para conversar livremente, conecte o Claude Code: rode <code>npm start</code> e abra <code>http://127.0.0.1:4317</code> com a execução ligada.</p></div>`}
 <div class="ac-home" aria-hidden="true"></div></div></div>`;
 }
-function openAgentChat(agentId){
+function openAgentChat(agentId,opt){
  const a=agentById(agentId);if(!a)return;if(ui.modal)closeModal();ui.selectedId=a.id;ui.dismissedId=null;render();
  const saved=ui.agentChats?.[a.id];
  ui.agentChat={kind:'agent',agentId:a.id,greeting:saved?.greeting||feGreeting(a),messages:saved?saved.messages.map(m=>({...m})):[],seq:saved?.seq||0,queue:[],busy:false,runId:null,started:0,token:null,read:true,opened:Date.now(),focus:saved?.focus||null,flow:null,greeted:!!saved};
  showModal(E(a.name),'CONVERSA',agentPhoneHTML(a),'','agent-phone','agent-chat');
- const c=ui.agentChat;renderFeatureChat(()=>agentChatMenu(c));
+ const c=ui.agentChat;renderFeatureChat(()=>opt?agentChatStart(c,opt):agentChatMenu(c));
 }
+// Opened for a task (e.g. the run button with nothing pending): the option goes in as if the person had picked it.
+function agentChatStart(c,opt){const a=agentById(c?.agentId),o=a&&AGENT_CHAT_MENUS[chatFamily(a)].find(x=>x[0]===opt);if(!o||chatNow()!==c)return agentChatMenu(c);chatPush({role:'user',text:o[1]});agentChatAct(c,a,opt);}
 // Every time the chat opens, the agent offers the options of its function (once the greeting is on screen).
 function agentChatMenu(c){const a=agentById(c?.agentId);if(!a||chatNow()!==c)return;const last=c.messages.at(-1);if(last?.menu&&!last.used)return;agentSay(c,{text:acMenuLine(c.messages.length?'again':'first'),options:agentMenuOptions(a),menu:true},c.messages.length?520:640);}
 // Scripted reply: typing dots for a moment, then the bubble with its options. Messages typed meanwhile wait in the queue.
@@ -1982,6 +1984,48 @@ function openProjectAdrs(add){
  openOpsSection('opsBriefing');
  setTimeout(()=>{const list=$('#adrList');if(!list)return;const doc=list.closest('details');if(doc)doc.open=true;if(add)$('[data-action="adr-add"]')?.click();(add?list.lastElementChild:doc)?.scrollIntoView({behavior:'smooth',block:'center'});if(add)toast('ADR novo aberto na documentação do projeto. Clique em Salvar projeto para registrar.');},140);
 }
+/* Next sprint, proposed by the commander and registered only on approval. The target is the last sprint while none of its features
+   started (Sprint 01 right after the kickoff), else a new one. Keys and dependencies are re-resolved on apply. */
+const SPRINT_PROPOSAL_MAX=8;
+function nextFeatureNumber(p){return Math.max(0,...p.features.map(x=>parseInt(String(x.key).replace(/\D/g,''),10)||0))+1;}
+function sprintPlanTarget(p){const s=p.sprints.at(-1);return s&&sprintFeatures(s,p).every(f=>['backlog','ready','blocked'].includes(f.status)&&!f.outputs.length)?s:null;}
+function sprintPlanTask(p,c){
+ const s=sprintPlanTarget(p),name=s?s.name:'Sprint '+pad(p.sprints.length+1),n=nextFeatureNumber(p),first='F'+pad(n),cur=c?.focus?.proposal;
+ return[`Monte a proposta de features da ${name} (${s?(sprintFeatures(s,p).length?'já existe no painel e recebe estas features junto com as que já tem':'já existe no painel, ainda vazia'):'nova no painel'}) para a pessoa aprovar. Nada é cadastrado até ela tocar em "Criar no painel".`,
+  '- Parta do briefing, do escopo e das features que já existem: não repita o que já foi feito ou planejado e respeite o que ficou fora do escopo.',
+  `- Proponha de 1 a ${SPRINT_PROPOSAL_MAX} features pequenas e verificáveis, cada uma com escopo (${Object.keys(SCOPES).filter(k=>k!=='setup').join(', ')}), prioridade (P0, P1 ou P2), descrição curta, critérios de aceitação verificáveis e dependências. O escopo decide quem da squad entra na rota; a rota é do plano de execução, não daqui.`,
+  `- As novas features recebem as chaves ${first}, F${pad(n+1)}, F${pad(n+2)}... nesta ordem. Em "dependsOn" use chaves de features que já existem ou desta proposta que vierem antes.`,
+  '- No texto, 1 ou 2 frases com o objetivo da sprint e a ordem de ataque. A lista vai só no bloco.',
+  '- Termine com UM bloco ```json exatamente neste formato:',`{"proposal":{"goal":"objetivo da sprint em uma frase","features":[{"key":"${first}","title":"título curto","scope":"backend","priority":"P1","description":"o que entregar","criteria":["critério verificável"],"dependsOn":[]}]}}`,
+  '- Se a pessoa pedir ajustes, mande a proposta inteira de novo, já ajustada. Se ela só perguntar algo, responda sem o bloco.',
+  cur?`Proposta atual (a que a pessoa está vendo):\n${JSON.stringify({proposal:cur})}`:''].filter(Boolean).join('\n');
+}
+function sprintProposal(data){
+ const raw=data?.proposal;if(!raw||typeof raw!=='object'||!Array.isArray(raw.features))return null;
+ const t=(v,n)=>String(v??'').trim().slice(0,n),list=v=>Array.isArray(v)?v.map(x=>t(x,2000)).filter(Boolean).map(x=>/^[-*]\s/.test(x)?x:`- ${x}`).join('\n'):t(v,8000),seen=new Set();
+ const features=raw.features.filter(x=>x&&typeof x==='object'&&t(x.title,120)).slice(0,SPRINT_PROPOSAL_MAX).map(x=>{let key=t(x.key,15).toUpperCase();if(seen.has(key))key='';else seen.add(key);
+  return{key,title:t(x.title,120),scope:Object.hasOwn(SCOPES,x.scope)&&x.scope!=='setup'?x.scope:'fullstack',priority:['P0','P1','P2'].includes(x.priority)?x.priority:'P1',description:t(x.description,8000),criteria:list(x.criteria).slice(0,8000),dependsOn:(Array.isArray(x.dependsOn)?x.dependsOn:[]).map(d=>t(d,15).toUpperCase()).filter(Boolean).slice(0,20)};});
+ return features.length?{goal:t(raw.goal,2000),features}:null;
+}
+function sprintProposalMD(p,pr){const s=sprintPlanTarget(p);return[`**${s?s.name:'Sprint '+pad(p.sprints.length+1)}**${pr.goal?`: ${pr.goal}`:''}`,pr.features.map(x=>`- **${x.key?x.key+' · ':''}${x.title}** (${SCOPES[x.scope]}, ${x.priority}${x.dependsOn.length?`, depois de ${x.dependsOn.join(', ')}`:''})${x.description?`\n  ${acClip(x.description,180)}`:''}`).join('\n')].join('\n\n');}
+function applySprintProposal(p,pr){
+ let s=sprintPlanTarget(p);const created=!s;
+ if(created){if(p.sprints.length>=50)return null;s=createSprint(p.sprints.length+1,{goal:pr.goal});p.sprints.push(s);}else if(!s.goal&&pr.goal)s.goal=pr.goal;
+ // A key of this proposal only resolves to an earlier item of it (no cycles); any other key to an existing feature.
+ const own=new Set(pr.features.map(x=>x.key).filter(Boolean)),made=new Map(),features=[];let n=nextFeatureNumber(p);
+ for(const x of pr.features){
+  const dependencies=[...new Set(x.dependsOn.map(k=>own.has(k)?made.get(k)?.id:p.features.find(f=>f.key.toUpperCase()===k)?.id).filter(Boolean))];
+  const f=createFeature(x.title,n++,{description:x.description,...(x.criteria?{criteria:x.criteria}:{}),scope:x.scope,priority:x.priority,sprintId:s.id,dependencies});
+  p.features.push(f);features.push(f);if(x.key)made.set(x.key,f);
+ }
+ ensureSetup(p);setSprintOpen(s.id,true);log(`${s.name}: ${features.map(f=>f.key).join(', ')} criadas a partir da proposta do comandante. Distribuição pendente.`,'plan');save();render();
+ return{sprint:s,features,created};
+}
+// Run with nothing pending: the commander proposes the next sprint (bridge), else the person creates it in the panel.
+function nextSprintOffer(p,text,create){
+ const cmd=agentById(p.commanderId);if(liveMode()&&cmd){toast(`${text} ${cmd.name} vai propor a próxima sprint.`);return openAgentChat(cmd.id,'sprint');}
+ toast(`${text} Crie a próxima sprint e as features dela no painel da operação.`,'error');if(create)openSprintEditor();
+}
 async function agentChatAct(c,a,opt,arg){
  const p=project(),fam=chatFamily(a),f=featureById(arg),live=liveMode(),num=i=>'ADR-'+String(i+1).padStart(3,'0');
  const say=(text,x={})=>agentSay(c,{text,options:[...(x.options||[]),AC_MENU].filter(Boolean),list:x.list});
@@ -2007,16 +2051,25 @@ async function agentChatAct(c,a,opt,arg){
   case 'review':{const l=p.features.filter(x=>x.status!=='done');return l.length?say('Qual feature eu reviso?',{list:l.map(x=>({...acFeatureRow(x,'review-pick'),say:`Revisa a arquitetura da ${x.key} · ${x.title}?`}))}):say('Não há features abertas para revisar.');}
   case 'review-pick':if(!f)return missing();c.focus={feature:f.id};return runAgentChat([c.messages.at(-1)],`Revise a arquitetura da feature ${f.key}: riscos, contratos de API, modelo de dados, integrações e ADRs relacionados. Diga o que precisa ser decidido antes de implementar.`);
   // Commander
-  case 'status':return say(operationStatusMD(p),{options:[{id:'distribute',label:'Distribuir features'},{id:'run',label:'Executar sprint atual'},p.features.some(x=>x.status==='review')&&{id:'reviews',label:'Revisões pendentes'}]});
+  case 'status':return say(operationStatusMD(p),{options:[live&&{id:'sprint',label:'Planejar próxima sprint'},{id:'distribute',label:'Distribuir features'},{id:'run',label:'Executar sprint atual'},p.features.some(x=>x.status==='review')&&{id:'reviews',label:'Revisões pendentes'}]});
   case 'distribute':if(!p.briefing.trim())return say('Preciso do briefing antes de distribuir. Escreva o contexto da operação e me chame de novo.',{options:[{id:'open-briefing',label:'Abrir briefing'}]});return go('Vou montar o plano de distribuição.',()=>openDistribution());
-  case 'run':{if(runner)return say('A operação já está em andamento. Acompanhe pelo mapa e pelo registro de transmissões.');{const miss=runGaps(p);if(miss.length)return say(`Ainda não dá para executar: o projeto precisa estar completo antes. Falta preencher ${miss.join(', ')}.`,{options:[{id:'open-briefing',label:'Abrir briefing'}]});
+  case 'run':{if(runner)return say('A operação já está em andamento. Acompanhe pelo mapa e pelo registro de transmissões.');{const miss=runGaps(p),rc=reconOnly(p);if(miss.length)return say(`Ainda não dá para executar: o projeto precisa estar completo antes. Falta preencher ${miss.join(', ')}.`,{options:[{id:'open-briefing',label:'Abrir briefing'}]});
    if(rc)return rc.status==='review'?say(`${rc.key} aguarda a sua revisão: depois dela a squad usa o mapa do repositório nas próximas features.`):go(`Primeiro a ${rc.key}: a squad mapeia o repositório e preenche a documentação. Iniciando!`,()=>{closeModal();startRun();});}refreshBlocked();const s=currentSprint(p),fs=s?sprintFeatures(s,p):[];
    if(fs.some(x=>x.status==='backlog'&&!routeFor(x).missing.length))return go(`${s.name} ainda tem features sem rota. Vou montar o plano dela primeiro, e você aplica e executa.`,()=>{closeModal();startRun();});
    if(fs.some(x=>x.status==='ready'&&x.route.length&&depsReady(x)))return go(live?`Iniciando ${s.name} com o Claude Code!`:`Iniciando ${s.name} em modo demonstração!`,()=>{closeModal();startRun();});
+   if(!fs.some(x=>x.status!=='done'))return say(fs.length?`${s.name} está concluída e não há outra sprint com features pendentes no painel.`:`${s?.name||'A sprint atual'} ainda não tem features no painel.`,{options:[live&&{id:'sprint',label:'Planejar próxima sprint'}]});
    return say(`Nenhuma feature de ${s?.name||'sprint atual'} está pronta para executar agora. Confira as revisões e as dependências.`,{options:[fs.some(x=>x.status==='review')&&{id:'reviews',label:'Revisões pendentes'},p.features.some(x=>x.status==='backlog')&&{id:'distribute',label:'Distribuir features'}]});}
   case 'reviews':{const l=p.features.filter(x=>x.status==='review');return l.length?say('Estas entregas aguardam a sua revisão:',{list:l.map(x=>acFeatureRow(x,'review-open'))}):say('Nenhuma entrega aguardando revisão.');}
   case 'review-open':return f?go(`Abrindo a ${f.key} para revisão.`,()=>openOpsFeature(f.id)):missing();
   case 'open-briefing':return go('Abrindo o briefing da operação.',()=>openOpsSection('opsBriefing'));
+  // Next sprint: the commander proposes features (sprintPlanTask, "proposal" block) and only "Criar no painel" registers them.
+  case 'sprint':if(!live)return say('Conecte o bridge do Claude Code para eu propor a próxima sprint. Sem ele, crie a sprint e as features no painel da operação.');c.focus={sprint:true};return runAgentChat([c.messages.at(-1)]);
+  case 'sprint-adjust':return listen('Me diz o que mudar na proposta que eu mando ela de novo, já ajustada.');
+  case 'sprint-apply':{const pr=c.focus?.proposal;if(!pr)return say('Não tenho uma proposta aberta agora.',{options:[live&&{id:'sprint',label:'Planejar próxima sprint'}]});
+   if(runner)return say('A squad está executando agora. Quando a execução terminar, é só tocar de novo em Criar no painel.',{options:[{id:'sprint-apply',label:'Criar no painel'}]});
+   const r=applySprintProposal(p,pr);if(!r)return say('O projeto já está no limite de 50 sprints. Remova uma sprint vazia e tente de novo.');c.focus=null;const keys=r.features.map(x=>x.key);
+   return say(`Pronto! ${r.sprint.name} ${r.created?'criada':'atualizada'} no painel com ${keys.length>1?keys.slice(0,-1).join(', ')+' e '+keys.at(-1):keys[0]}. Quando quiser executar, eu monto o plano de execução e você aprova.`,{options:[{id:'sprint-open',arg:r.sprint.id,label:'Ver no painel'},{id:'run',label:'Executar sprint'}]});}
+  case 'sprint-open':return go('Abrindo o painel da operação.',()=>{goView('projects');if(sprintById(arg,p)){setSprintOpen(arg,true);render();}});
   // Operators
   case 'mine':{const l=p.features.filter(x=>x.route.includes(a.id));return l.length?say('Essas estão na minha rota:',{list:l.map(x=>acFeatureRow(x,'mine-pick'))}):say('Nenhuma feature na minha rota ainda. O comandante distribui as features no plano.',{options:[{id:'spawn',label:'Spawn individual'}]});}
   case 'mine-pick':{if(!f)return missing();const i=f.route.indexOf(a.id),prev=agentById(f.route[i-1]),st={backlog:'ainda não começou',blocked:'está bloqueada',ready:'está pronta para começar',running:'está em execução',review:'está em revisão',done:'já foi concluída'}[f.status]||'';
@@ -2049,7 +2102,7 @@ function agentChatPrompt(a,c,msgs,task){
 }
 // Free conversation: one turn per block of new messages (the ones sent meanwhile wait and go together), like runCoWrite.
 async function runAgentChat(msgs,task){
- const c=chatNow(),a=agentById(c?.agentId);if(c?.kind!=='agent'||!a||!msgs.length)return;
+ const c=chatNow(),a=agentById(c?.agentId);if(c?.kind!=='agent'||!a||!msgs.length)return;task=task||(c.focus?.sprint?sprintPlanTask(project(),c):null);
  const token={};c.token=token;c.busy=true;c.started=Date.now();c.read=false;const mine=()=>chatNow()===c&&c.token===token;let live=null;
  try{
   const started=await bridgeFetch('/api/runs',{method:'POST',body:JSON.stringify({prompt:agentChatPrompt(a,c,msgs,task),systemPrompt:agentSystemPrompt(a)+'\n\n'+[soulBlock(a,c.greeting),AGENT_CHAT_SYSTEM].filter(Boolean).join('\n\n'),label:`${a.name} / conversa`,meta:runMeta(project(),a,null,'chat'),options:{...runOptionsFor(a),...CHAT_RUN}})});
@@ -2060,7 +2113,9 @@ async function runAgentChat(msgs,task){
   const lm=live.stop();c.runId=null;chatTyping(false);const secs=Math.max(1,Math.round((Date.now()-c.started)/1000));
   if(exit.isError){if(lm)chatSettle(lm,{});chatPush(exit.status==='cancelled'?{role:'system',text:'Resposta interrompida.'}:{role:'system',text:`Não consegui responder: ${exit.error||'falha na execução do Claude Code.'}`,error:true,retry:msgs.map(x=>x.id),task:task||null});}
   // A ```json block is only taken out of the reply when it carries an "ask" (a technical answer may show JSON on purpose).
-  else{const raw=exit.result||'',{reply,data}=parseCoWrite(raw),ask=chatAsk(data);chatSettle(lm,{text:chatAskText(chatClean(ask?reply:raw),ask)||'(sem resposta)',cost:exit.costUsd??null,secs,options:[...chatAskOptions(ask),AC_MENU]});}
+  // In sprint planning a "proposal" block becomes the list in the bubble plus Criar no painel; the latest one stays in c.focus.
+  else{const raw=exit.result||'',{reply,data}=parseCoWrite(raw),ask=chatAsk(data),prop=!ask&&c.focus?.sprint?sprintProposal(data):null;if(prop)c.focus={...c.focus,proposal:prop};
+   chatSettle(lm,prop?{text:[chatClean(reply),sprintProposalMD(project(),prop)].filter(Boolean).join('\n\n'),cost:exit.costUsd??null,secs,options:[{id:'sprint-apply',label:'Criar no painel'},{id:'sprint-adjust',label:'Pedir ajustes'},AC_MENU]}:{text:chatAskText(chatClean(ask?reply:raw),ask)||'(sem resposta)',cost:exit.costUsd??null,secs,options:[...chatAskOptions(ask),AC_MENU]});}
  }catch(error){if(mine()){const lm=live?.stop();if(lm)chatSettle(lm,{});chatTyping(false);chatPush({role:'system',text:`Não consegui responder: ${error.message}`,error:true,retry:msgs.map(x=>x.id),task:task||null});}}
  finally{if(mine()){c.busy=false;c.runId=null;chatTyping(false);if(c.queue.length)runAgentChat(c.queue.splice(0));}}
 }
@@ -2854,7 +2909,7 @@ function startRun(scope=null){
  }
  const p=project(),rc=reconOnly(p);if(!runGate(p,rc))return;refreshBlocked();if(rc)return startFeatureRun(rc);if(scope?.featureId)return startFeatureRun(featureById(scope.featureId));
  const s=sprintById(scope?.sprintId,p)||currentSprint(p);if(!s)return toast('Crie uma sprint antes de executar.','error');
- const fs=sprintFeatures(s,p);if(!fs.length)return toast(`${s.name} não tem features. Crie ou arraste features para ela.`,'error');if(fs.every(f=>f.status==='done'))return toast(`${s.name} já está concluída. Todas as entregas foram aprovadas.`);
+ const fs=sprintFeatures(s,p);if(!fs.length)return scope?.sprintId?toast(`${s.name} não tem features. Crie ou arraste features para ela.`,'error'):nextSprintOffer(p,`${s.name} ainda não tem features.`,false);if(fs.every(f=>f.status==='done'))return scope?.sprintId?toast(`${s.name} já está concluída. Todas as entregas foram aprovadas.`):nextSprintOffer(p,`${s.name} está concluída e não há outra sprint com features pendentes no painel.`,true);
  const pending=fs.filter(f=>['backlog','ready','blocked'].includes(f.status)),review=fs.filter(f=>f.status==='review');
  if(!pending.some(f=>depsReady(f)))return toast(pending.length?`${s.name}: ${blockedWhy(pending[0],p)}`:review.length?`${s.name}: ${review.map(f=>f.key).join(', ')} aguarda${review.length>1?'m':''} sua revisão.`:`${s.name}: nenhuma feature pendente.`,'error');
  beginPlan({featureId:null,paused:false,single:false,sprintId:s.id,kind:'sprint',label:s.name},`${s.name} iniciada`,pending);
