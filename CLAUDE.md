@@ -118,7 +118,13 @@ the same `commitStep` in the operation folder (`run.stepCommit` with `repo: null
 `POST /api/publish/:folder {remote}` (person-initiated; `remote` = https/ssh/git@ URL without userinfo, or an existing absolute path)
 sets `origin` (marked `squad.publish`, refused with 409 on a linked clone, whose origin is the registered repository, and before the
 first commit), applies `guardClone`, pushes the current branch to the URL with `SQUAD_BRIDGE_PUSH=1` and answers `{branch, commit,
-dirty, web}` (`webUrl`); later runs of a folder with an origin get `guardClone` too. **Toolchains:** `GET /api/toolchains[?refresh=1]`
+dirty, web}` (`webUrl`); later runs of a folder with an origin get `guardClone` too. The push is never forced: when the remote
+branch (`ls-remote`) is not an ancestor of HEAD it is fetched and classified with a 409 `code`: `remote-ahead` (shared history,
+with `commits`: pull in the folder), `remote-has-work` (unrelated history beyond a starter commit: register it in Repositórios),
+`remote-starter` (one commit with only `STARTER_RE` files, the README/LICENSE/.gitignore a host creates; `files`). With `integrate:
+true` a starter is joined (`merge -s ours --allow-unrelated-histories`, files only the remote has are checked out unless the folder
+has one on disk, `merge --abort` on failure) and then pushed; `publishProject` asks first ("Integrar e enviar", `bridgeFetch` errors
+carry `code` and `body`). **Toolchains:** `GET /api/toolchains[?refresh=1]`
 runs each `TOOLCHAINS` entry's version command (`resolveBin` + `spawnBin`, `detectTool`; git, node, python, dotnet SDKs, javac, go,
 flutter, cargo, docker; a launcher whose output has no version, like the .NET runtime without an SDK, counts as missing), cached for
 `TOOL_TTL` (`toolchains`); never installs anything. `withEnv: true` (plans and feature steps) appends `envNote` (found tools and

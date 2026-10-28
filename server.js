@@ -166,6 +166,8 @@ function ensureProjectRepo(dir) {
 const REPOS_FILE = path.resolve(process.env.SQUAD_REPOS || path.join(DATA_DIR, 'repos.json'));
 const BRANCH_RE = /^(?![-/.])(?!.*\.\.)[A-Za-z0-9._/-]{1,100}$/;
 const REPO_URL_RE = /^(https:\/\/|ssh:\/\/|git@)[^\s"']{3,500}$/;
+// Files of the starter commit a host creates with a new repository (GitHub's README/LICENSE/.gitignore boxes): /api/publish joins it.
+const STARTER_RE = /^(?:(?:README|LICEN[CS]E|COPYING)(?:\.[A-Za-z]{1,8})?|\.gitignore|\.gitattributes)$/i;
 // https URLs with a user, password or token: refused when saved from the page (the git credential manager keeps those) and masked.
 const CRED_URL_RE = /^https?:\/\/[^/@\s]+@/;
 const maskUrl = u => String(u || '').replace(/^(https?:\/\/)[^/@\s]+@/, '$1***@');
@@ -1158,6 +1160,32 @@ async function handle(req, res) {
       await guardClone(dir);
       const branch = await gitRun(['symbolic-ref', '--short', 'HEAD'], dir).catch(() => '');
       if (!BRANCH_RE.test(branch)) return fail(res, 409, 'A pasta da operação não está numa branch.');
+      // The push is always a plain fast-forward, never forced. A remote branch the folder does not contain is joined only when it
+      // holds just the starter commit a host creates with the repository (STARTER_RE files) and the person asked (integrate);
+      // a remote with work of its own is refused (an existing repository goes through Repositórios and Enviar branch).
+      const remoteHead = (await gitRun(['ls-remote', remote, `refs/heads/${branch}`], dir, 60000).catch(() => '')).split(/\s/)[0];
+      if (remoteHead && !await gitOk(['merge-base', '--is-ancestor', remoteHead, 'HEAD'], dir)) {
+        try { await gitRun(['fetch', '-q', '--no-tags', remote, `refs/heads/${branch}`], dir, 180000); }
+        catch (e) { return fail(res, 502, `git fetch falhou: ${e.message}`); }
+        const theirs = await gitRun(['rev-parse', 'FETCH_HEAD'], dir), related = await gitOk(['merge-base', theirs, 'HEAD'], dir);
+        const files = (await gitRun(['ls-tree', '-r', '--name-only', theirs], dir)).split('\n').filter(Boolean);
+        const count = Number(await gitRun(['rev-list', '--count', related ? `HEAD..${theirs}` : theirs], dir));
+        if (related) return json(res, 409, { ok: false, code: 'remote-ahead', branch, commits: count, error: `O remoto tem ${count} commit(s) em ${branch} que a pasta da operação não tem (alguém enviou depois do último envio). O SQUAD/CODE não envia por cima: integre esses commits em projects/${parts[2]} (git pull) e envie de novo.` });
+        if (count !== 1 || !files.every(f => STARTER_RE.test(f))) return json(res, 409, { ok: false, code: 'remote-has-work', branch, commits: count, error: `O repositório remoto já tem trabalho em ${branch} (${count} commit(s)) sem relação com esta operação. O SQUAD/CODE não envia por cima. Para trabalhar num repositório existente, cadastre-o em Configurações > Repositórios e crie uma operação de repositório existente: cada feature vai numa branch para PR.` });
+        if (body.integrate !== true) return json(res, 409, { ok: false, code: 'remote-starter', branch, files, error: `O remoto só tem o commit inicial criado com o repositório (${files.join(', ')}). Integre-o para enviar.` });
+        // The folder's files win; files only the remote has (a LICENSE, a .gitignore) are kept, unless the folder has one on disk.
+        const mine = new Set((await gitRun(['ls-tree', '-r', '--name-only', 'HEAD'], dir)).split('\n'));
+        const keep = files.filter(f => !mine.has(f) && !fs.existsSync(path.join(root, f)));
+        try {
+          await gitRun(['merge', '-q', '--allow-unrelated-histories', '-s', 'ours', '--no-commit', theirs], dir, 60000);
+          if (keep.length) await gitRun(['checkout', theirs, '--', ...keep], dir);
+          const who = await gitRun(['config', 'user.email'], dir).catch(() => '');
+          await gitRun([...(who ? [] : ['-c', 'user.name=SQUAD/CODE', '-c', 'user.email=squad-code@localhost']), 'commit', '-q', '-m', `SQUAD/CODE: integra o commit inicial de ${branch} do remoto`], dir, 120000);
+        } catch (e) {
+          await gitRun(['merge', '--abort'], dir).catch(() => {});
+          return fail(res, 502, `Não foi possível integrar o commit inicial do remoto: ${e.message}`);
+        }
+      }
       // The origin's push URL is disabled for the agents: the bridge pushes to the URL itself, with its mark.
       try { await gitRun(['push', '-q', remote, `HEAD:refs/heads/${branch}`], dir, 180000, null, { SQUAD_BRIDGE_PUSH: '1' }); }
       catch (e) { return fail(res, 502, `git push falhou: ${e.message}`); }

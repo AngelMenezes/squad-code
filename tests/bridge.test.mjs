@@ -1161,6 +1161,65 @@ test('a new project commits each step in its own folder and the person publishes
   } finally { rmSync(reposFile, { force: true }); }
 });
 
+test('publishing never forces: the starter commit of a new remote is joined on request, a remote with work of its own is refused', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  // A bare remote whose main holds the given commits (each a map of files), as GitHub creates it or as a team keeps it.
+  const remoteWith = (...commits) => {
+    const bare = tmp('squad-remote-'), work = tmp('squad-work-'); extraDirs.push(bare, work);
+    execFileSync('git', ['init', '-q', '--bare', bare], { stdio: 'ignore' });
+    gitIn(work, 'init', '-q'); gitIn(work, 'checkout', '-q', '-b', 'main');
+    for (const files of commits) { for (const [f, text] of Object.entries(files)) writeFileSync(path.join(work, f), text); gitIn(work, 'add', '.'); gitIn(work, 'commit', '-q', '-m', 'c'); }
+    gitIn(work, 'push', '-q', bare, 'main');
+    return bare;
+  };
+  const step = async (folder, prompt) => {
+    const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt, label: 'FORGE / F00', options: { project: folder, commit: true } }) });
+    assert.equal(res.status, 201, await res.clone().text());
+    await collect((await res.json()).runId);
+  };
+  const publish = (folder, body) => api(`/api/publish/${folder}`, { method: 'POST', body: JSON.stringify(body) }).then(async r => ({ status: r.status, ...await r.json() }));
+
+  // Starter commit (README + LICENSE, the GitHub boxes): refused until the person asks, then joined and sent as a fast-forward.
+  const starter = remoteWith({ 'README.md': '# Forge\n', LICENSE: 'MIT\n' }), before = gitIn(starter, 'rev-parse', 'main');
+  const a = 'op-097-starter', dirA = path.join(projectsRoot, a);
+  await step(a, 'base WRITE:README.md WRITE:src/main.py');
+  const ask = await publish(a, { remote: starter });
+  assert.deepEqual([ask.status, ask.code, ask.files], [409, 'remote-starter', ['LICENSE', 'README.md']]);
+  assert.equal(gitIn(starter, 'rev-parse', 'main'), before);
+  const sent = await publish(a, { remote: starter, integrate: true });
+  assert.equal(sent.ok, true, JSON.stringify(sent));
+  assert.equal(gitIn(starter, 'rev-parse', 'main'), gitIn(dirA, 'rev-parse', 'HEAD'));
+  assert.equal(gitIn(starter, 'merge-base', '--is-ancestor', before, 'main'), '');
+  // The folder's README wins; the LICENSE only the remote had is kept.
+  assert.equal(gitIn(starter, 'show', 'main:README.md'), 'escrito pelo agente: README.md');
+  assert.equal(gitIn(starter, 'show', 'main:LICENSE'), 'MIT');
+  // Later sends are plain fast-forwards again.
+  await step(a, 'mais WRITE:src/util.py');
+  assert.equal((await publish(a, { remote: starter })).status, 200);
+
+  // A remote with code of its own (an existing repository): refused even when asked to integrate, nothing pushed.
+  const team = remoteWith({ 'README.md': '# App\n' }, { 'app.py': 'print(1)\n' }), teamHead = gitIn(team, 'rev-parse', 'main');
+  const b = 'op-098-team';
+  await step(b, 'base WRITE:src/main.py');
+  for (const integrate of [false, true]) {
+    const r = await publish(b, { remote: team, integrate });
+    assert.deepEqual([r.status, r.code, r.commits], [409, 'remote-has-work', 2]);
+    assert.match(r.error, /Repositórios/);
+  }
+  const single = remoteWith({ 'app.py': 'print(1)\n' });
+  assert.equal((await publish(b, { remote: single, integrate: true })).code, 'remote-has-work');
+  assert.equal(gitIn(team, 'rev-parse', 'main'), teamHead);
+
+  // A remote that moved ahead after an earlier send (shared history): refused with the commit count.
+  const other = tmp('squad-other-'); extraDirs.push(other);
+  execFileSync('git', ['clone', '-q', '-b', 'main', starter, other], { stdio: 'ignore' });
+  writeFileSync(path.join(other, 'extra.md'), 'x\n'); gitIn(other, 'add', '.'); gitIn(other, 'commit', '-q', '-m', 'x'); gitIn(other, 'push', '-q', 'origin', 'main');
+  await step(a, 'outra WRITE:src/more.py');
+  const ahead = await publish(a, { remote: starter, integrate: true });
+  assert.deepEqual([ahead.status, ahead.code, ahead.commits], [409, 'remote-ahead', 1]);
+});
+
 test('the tools of this machine come from their version commands, are cached, and go to plans and steps that ask (withEnv)', async () => {
   const bin = tmp('squad-bin-'); extraDirs.push(bin);
   const fake = (name, lines) => process.platform === 'win32'
