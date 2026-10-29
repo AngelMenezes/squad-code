@@ -274,7 +274,12 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
 - **Nova operação** (`project-new` → `openProjectEditor()` → `openOpNew`) is a three-step wizard in a modal (kind `op-new`, `ui.opNew`
   `{name, repoId, reconMode, remote}`): the name (`#opNewForm` → `opNewNext`), where the code comes from (`opNewCodeStep`,
   `#opNewCodeForm` → `opNewCode`: a new project with an optional remote, checked by `remoteProblem`, or a registered repository with
-  reconnaissance or direct work; the sub-fields follow the radios through CSS `:has`), then an existing squad (`op-new-existing` →
+  reconnaissance or direct work; the sub-fields follow the radios through CSS `:has`; with the bridge "Repositório existente" is always
+  enabled and registers a repository in place (`opNewRepoAddHTML`, shown with none registered or after `op-new-repo-add`; fields
+  `repoSource`/`repoName`/`repoKey`/..., name and identifier suggested by `repoNameOf`/`repoIdFor`; `opNewRegister`, also reached by
+  Enter through `opNewCode`, PUTs with `registerRepo`, errors in `#opNewRepoErr`, then `checkBridge` and the step comes back with it
+  selected; `opNewKeep` saves remote/kind/repository into `ui.opNew` before any redraw; `opNewCodeStep(focus)` sets `autofocus`,
+  since `showModal` focuses in a rAF)), then an existing squad (`op-new-existing` →
   `#opNewSquadForm` with `squadPickerHTML` → `opNewCreate`) or a new one (`op-new-squad` → `opNewNewSquad`: `ui.opPending={...ui.opNew}` +
   `newSquad()`; the Studio tags the draft and `saveSquad` creates the operation with the new squad; cancelling, picking another squad or
   leaving the Studio drops `ui.opPending`). `op-new-back`/`op-new-back-code` keep the choices.
@@ -313,7 +318,7 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   `project.published` `{at, branch, commit}` (persisted) keeps the last send, `ui.publishWeb` its web link.
 - Existing repository: `project.repoId` (persisted; chosen in the wizard or the briefing's REPOSITÓRIO EXISTENTE, `repoFieldHTML`, from
   `ui.bridge.repos`; fixed once a feature has an output, `repoLocked`) goes to the bridge as `repo` in `runOptionsFor`. Repositories are
-  registered in Configurações > Repositórios (tab `repos`: `loadRepoList`, `renderRepoPane`, `#repoForm` → `saveRepo`, `repoDelete` with
+  registered in Configurações > Repositórios (tab `repos`: `loadRepoList`, `renderRepoPane`, `#repoForm` → `saveRepo` → `registerRepo`, `repoDelete` with
   a second click to confirm; the identifier field is named `key`, since a control named `id` would shadow `form.id` in the submit router).
   `project.reconMode` (persisted, 'map' | 'direct' | 'team', RECONHECIMENTO in the briefing, `.if-linked`, locked like the repository):
   `teamMode(p)` = linked + 'team' (the team's map, docs/squad from another developer's merged reconnaissance, is on the base branch):

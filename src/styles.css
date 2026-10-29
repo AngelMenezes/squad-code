@@ -1645,7 +1645,16 @@ body:not(.reduce-motion) .at-tile.leaving,.at-tile.leaving{animation:at-leave .4
 .op-recon-redo:hover,.op-recon-redo:has(input:checked){color:#a9b8bf}
 .op-recon-note{font-size:10px;line-height:1.6;color:#82949c;padding:2px}
 .op-recon-note.warning{color:#c5b995;border-left:2px solid #8f7e4e;padding:6px 10px;background:#24200f33}
-@media(max-width:560px){.op-code-recon{grid-template-columns:1fr}.op-code-sub{padding-left:0}}
+.op-repo-more{align-self:flex-start;margin-top:2px;font-size:11px;display:inline-flex;align-items:center;gap:5px}
+.op-repo-more svg{width:11px;height:11px}
+.op-repo-add{display:grid;gap:10px}
+.op-repo-adv summary{cursor:pointer;font:10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:#7e97a5;padding:2px 0}
+.op-repo-adv summary:hover{color:#a9b8bf}
+.op-repo-adv-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.op-repo-err{margin:0;font-size:11px;line-height:1.5}
+.op-repo-err[hidden]{display:none}
+.op-repo-actions{gap:8px;justify-content:flex-end}
+@media(max-width:560px){.op-code-recon,.op-repo-adv-grid{grid-template-columns:1fr}.op-code-sub{padding-left:0}}
 /* Briefing: reconhecimento e padrão de código só com repositório vinculado; o remoto só em projeto novo (segue o select, antes de salvar). */
 #projectForm:has(#projectRepo option[value=""]:checked) .if-linked{display:none}
 #projectForm:not(:has(#projectRepo option[value=""]:checked)) .if-new{display:none}
