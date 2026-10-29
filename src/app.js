@@ -3825,7 +3825,12 @@ document.addEventListener('change',event=>{if(event.target.id==='convTemplateSel
 // Subset search menu keyboard: arrows move, Enter adds, Esc closes only the menu (not the agent studio).
 // Feature editor: textareas grow with the content, Enter sends to the co-writer (Shift+Enter breaks the line), dependency summary.
 document.addEventListener('input',event=>{const t=event.target;if(t.classList?.contains('fe-area')||t.id==='feChatInput')autoGrow(t);if(t.id==='feChatInput')feSendState();if(ui.modal==='teams'&&(t.id==='feChatInput'||t.closest?.('#docForm')))teamsSync();if(ui.modal==='teams'&&t.id==='feChatInput')teamsMentionMenu();const sec=t.closest?.('.fe-md');if(sec&&t.classList.contains('fe-area'))sec.querySelector('.fe-md-count').textContent=feCount(sec.dataset.field,t.value);});
-document.addEventListener('focusout',event=>{const t=event.target;if(!t.classList?.contains('fe-area'))return;const sec=t.closest('.fe-md');if(!sec||sec.contains(event.relatedTarget))return;if(t.value.trim())feMdMode(sec,'view');});
+// A Markdown field leaving edit mode shrinks and moves what is below it. When the focus leaves through a mouse press, the switch waits
+// for the release: otherwise the press and the release land on different elements and the browser drops that click.
+let pointerHeld=false;document.addEventListener('pointerdown',()=>{pointerHeld=true;},true);document.addEventListener('pointerup',()=>{pointerHeld=false;},true);document.addEventListener('pointercancel',()=>{pointerHeld=false;},true);
+document.addEventListener('focusout',event=>{const t=event.target;if(!t.classList?.contains('fe-area'))return;const sec=t.closest('.fe-md');if(!sec||sec.contains(event.relatedTarget))return;
+ const go=()=>{if(sec.isConnected&&!sec.contains(document.activeElement)&&t.value.trim())feMdMode(sec,'view');};if(!pointerHeld)return go();
+ const later=()=>{removeEventListener('pointerup',later);removeEventListener('pointercancel',later);setTimeout(go);};addEventListener('pointerup',later);addEventListener('pointercancel',later);});
 document.addEventListener('mousedown',event=>{if(event.target.closest?.('.fe-md-tools button'))event.preventDefault();});
 document.addEventListener('change',event=>{if(ui.draft?.kind==='agent'&&(event.target.id==='agentModel'||event.target.name==='effort'))syncEffortField();});
 document.addEventListener('change',event=>{if(['agentRole','agentSpecialty'].includes(event.target.id)&&ui.draft?.kind==='agent')syncGenericHellos();});
