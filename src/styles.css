@@ -558,6 +558,14 @@ body:not(.reduce-motion) .office-label[data-room=WAR].live:before{animation:war-
 .squad-card .mini-faces{display:flex;min-height:26px}
 .squad-card-meta{font:8px var(--mono);letter-spacing:1px;color:var(--muted)}
 .home-squads-wrap{margin-bottom:26px}
+.home-repos-wrap{margin-bottom:34px}
+.home-repos{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.home-repo{border:1px solid #ffffff1c;background:#ffffff05;padding:16px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.home-repo h3{font:500 15px var(--sans);color:var(--ink);overflow-wrap:anywhere}
+.home-repo .tag{max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.home-repo-sub{font:9px var(--mono);color:#7e97a5;margin-top:-4px}
+.home-repo-ops{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px;color:var(--muted)}
+.home-repo-ops>span{margin-right:4px}
 .home-squads{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
 .home-squad{padding:16px;background:#0a0f12cc;border:1px solid #ffffff14;color:var(--ink);cursor:pointer;transition:border-color .15s,background .15s}
 .home-squad:hover{border-color:#30c5e880;background:#0b1519}

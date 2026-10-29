@@ -571,6 +571,14 @@ body:not(.reduce-motion) .office-label[data-room=WAR].live:before{animation:war-
 .squad-card .mini-faces{display:flex;min-height:26px}
 .squad-card-meta{font:8px var(--mono);letter-spacing:1px;color:var(--muted)}
 .home-squads-wrap{margin-bottom:26px}
+.home-repos-wrap{margin-bottom:34px}
+.home-repos{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.home-repo{border:1px solid #ffffff1c;background:#ffffff05;padding:16px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.home-repo h3{font:500 15px var(--sans);color:var(--ink);overflow-wrap:anywhere}
+.home-repo .tag{max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.home-repo-sub{font:9px var(--mono);color:#7e97a5;margin-top:-4px}
+.home-repo-ops{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px;color:var(--muted)}
+.home-repo-ops>span{margin-right:4px}
 .home-squads{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
 .home-squad{padding:16px;background:#0a0f12cc;border:1px solid #ffffff14;color:var(--ink);cursor:pointer;transition:border-color .15s,background .15s}
 .home-squad:hover{border-color:#30c5e880;background:#0b1519}
@@ -13743,7 +13751,7 @@ function renderHome(){
  const actions=homeActions(),review=actions.length;
  const today=new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long'});
  root.innerHTML=`<div class="home-inner"><header class="home-head"><div><div class="eyebrow">SQUAD CODE / ${E(today)}</div><h1>PAINEL <span>GERAL.</span></h1><p>${state.projects.length} operação(ões), ${state.agents.length} agentes${review?`, <strong>${review} ${review>1?'itens aguardam':'item aguarda'} sua ação</strong>`:''}.</p></div><div class="flex wrap home-actions"><button class="btn ghost" data-action="agent-new">${icon('plus')}Novo agente</button><button class="btn ghost" data-action="project-new">${icon('project')}Nova operação</button><button class="btn primary" data-action="view" data-view="network">${icon('arrow')}Abrir rede do squad</button></div></header>
-<section class="home-section home-projects-wrap"><div class="home-section-head"><span>OPERAÇÕES</span><span>${pad(state.projects.length)}</span></div><div class="home-projects">${state.projects.map(homeProjectCard).join('')}<button class="home-project new" data-action="project-new">${icon('plus')}<strong>Nova operação</strong><small>Nome do projeto e squad.</small></button></div></section><section class="home-section home-squads-wrap"><div class="home-section-head"><span>SQUADS</span><span class="flex">${pad(state.squads.length)}<button class="link-button" data-action="squad-studio">SQUAD STUDIO ${icon('chevron')}</button></span></div><div class="home-squads">${homeSquadsHTML()}</div></section>
+<section class="home-section home-projects-wrap"><div class="home-section-head"><span>OPERAÇÕES</span><span>${pad(state.projects.length)}</span></div><div class="home-projects">${state.projects.map(homeProjectCard).join('')}<button class="home-project new" data-action="project-new">${icon('plus')}<strong>Nova operação</strong><small>Nome do projeto e squad.</small></button></div></section>${homeReposHTML()}<section class="home-section home-squads-wrap"><div class="home-section-head"><span>SQUADS</span><span class="flex">${pad(state.squads.length)}<button class="link-button" data-action="squad-studio">SQUAD STUDIO ${icon('chevron')}</button></span></div><div class="home-squads">${homeSquadsHTML()}</div></section>
 <div class="home-grid"><section class="home-section"><div class="home-section-head"><span>EM EXECUÇÃO</span>${runner?'<i class="dot"></i>':''}</div>${homeRunHTML()}<div class="home-section-head" style="margin-top:22px"><span>AGUARDANDO SUA AÇÃO</span><span>${pad(review)}</span></div><div class="home-list">${homeActionsHTML(actions)}</div></section>
 <section class="home-section"><div class="home-section-head"><span>ATIVIDADE RECENTE</span><button class="link-button" data-action="logs">VER TRANSMISSÕES ${icon('chevron')}</button></div>${homeActivityChipsHTML()}<div class="home-list home-activity-list">${homeActivityHTML()}</div></section></div></div>`;
  root.scrollTop=scroll;
@@ -14149,6 +14157,29 @@ function squadCardInner(q){
  const chip=(a,slot)=>a?`<i class="sq-chip ${slot}" title="${E(a.name)} / ${E(SQUAD_SLOTS[slot].label)}">${icon(agentIcon(a))}</i>`:`<i class="sq-chip empty" title="${E(SQUAD_SLOTS[slot].label)}: vazio">${icon('lock')}</i>`;
  return`<span class="squad-card-top"><i class="sq-chip lead ${c?'':'empty'}">${icon(c?agentIcon(c):'lock')}</i><span class="grow"><strong>${E(q.name)}</strong><small>${c?`${icon('crown')} ${E(c.name)}`:'SEM COMANDANTE'}</small></span></span><span class="sq-chain">${chip(adr,'adr')}${chip(prd,'prd')}<span class="sq-chain-sep"></span>${ops.slice(0,6).map(a=>chip(a,'op')).join('')}${ops.length>6?`<em>+${ops.length-6}</em>`:''}${ops.length?'':'<em>SEM OPERADORES</em>'}</span><span class="squad-card-meta">${miss.length?`<b class="sq-inc">INCOMPLETA</b> · `:''}1 CMD · 2 REC · ${ops.length} OPS · ${n} ${n===1?'OPERAÇÃO':'OPERAÇÕES'}</span>`;
 }
+/* Painel REPOSITÓRIOS (bridge only): each registered repository with its team map (loadTeamMap, cached), its base branch on the origin
+   (loadBaseCheck), the operations working on it with their pending merges, and a new operation already pointed at it. */
+function homeReposHTML(){
+ const d=ui.bridge.repos;if(!BRIDGE_TOKEN||!d)return'';const list=d.repos||[];
+ for(const r of list)if(!r.error){loadTeamMap(r.id,false,300000);loadBaseCheck(r.id);}
+ const add=`<button class="home-squad new" data-action="home-repo-add">${icon('plus')}<strong>Cadastrar repositório</strong><small>Pasta local ou URL de um repositório com código.</small></button>`;
+ return`<section class="home-section home-repos-wrap"><div class="home-section-head"><span>REPOSITÓRIOS</span><span class="flex">${pad(list.length)}<button class="link-button" data-action="settings-tab" data-tab="repos">CONFIGURAR ${icon('chevron')}</button></span></div>${d.error?`<div class="notice warning">${icon('info')}<span>${E(d.error)}</span></div>`:''}<div class="home-repos">${list.map(homeRepoCard).join('')}${add}</div></section>`;
+}
+function homeRepoCard(r){
+ const ops=state.projects.filter(p=>p.repoId===r.id),merges=ops.reduce((n,p)=>n+pendingMerges(p).length,0),t=teamMapOf(r.id),b=baseCheckOf(r.id);
+ const strip=(tone,label,detail)=>`<div class="home-next" data-tone="${tone}"><strong>${E(label)}</strong>${detail?`<small>${E(detail)}</small>`:''}</div>`;
+ const gone=b?.status==='missing',map=r.error?strip('warn','Cadastro com erro',r.error)
+  :gone?strip('warn','Branch base fora do origin',`${b.baseBranch} não existe mais no origin: operações novas não criam features até trocar.`)
+  :!t||t.loading?strip('wait','Verificando o mapa da equipe','')
+  :t.map?strip('ready','Mapa da equipe na base',[t.commit&&`commit ${t.commit}`,t.date].filter(Boolean).join(', ')||'docs/squad na branch base.')
+  :t.pending?.length?strip('warn','Reconhecimento aguardando merge',t.pending.join(', '))
+  :t.error?strip('wait','Mapa da equipe não verificado',t.error)
+  :strip('todo','Sem mapa da equipe','A primeira operação com reconhecimento cria o docs/squad.');
+ return`<article class="home-repo"><div class="between"><span class="eyebrow">${E(r.id)}</span><span class="tag">${E(r.baseBranch||'BRANCH PADRÃO')}</span></div><h3>${E(r.name)}</h3>${r.subdir?`<small class="home-repo-sub">subpasta ${E(r.subdir)}</small>`:''}${map}
+<div class="home-repo-ops"><span>${ops.length?`${ops.length} ${ops.length>1?'operações':'operação'}${merges?` · ${merges} ${merges>1?'merges pendentes':'merge pendente'}`:''}`:'Nenhuma operação ainda'}</span>${ops.map(p=>`<button type="button" class="home-chip" data-action="home-open-project" data-id="${E(p.id)}" title="${E(p.name)}">${E(p.code)}</button>`).join('')}</div>
+<div class="home-project-foot flex">${gone?`<button class="btn sm primary" data-action="settings-tab" data-tab="repos">${icon('branch')}Trocar branch base</button>`:''}<button class="btn sm ${gone?'ghost':'primary'}" data-action="home-repo-op" data-id="${E(r.id)}" ${r.error?'disabled':''}>${icon('plus')}Nova operação aqui</button></div></article>`;
+}
+function homeRepoOp(id){openOpNew();if(ui.modal==='op-new'&&ui.opNew)Object.assign(ui.opNew,{repoId:id,existing:true});}
 function homeSquadsHTML(){return state.squads.map(q=>`<button class="home-squad squad-card" data-action="squad-open" data-id="${E(q.id)}">${squadCardInner(q)}</button>`).join('')+`<button class="home-squad new" data-action="squad-new">${icon('plus')}<strong>Nova squad</strong><small>Comandante, ADR, PRD e operadores.</small></button>`;}
 function squadPickerHTML(p){return`<div class="field full"><span class="label">SQUAD DA OPERAÇÃO</span><div class="squad-pick-grid">${state.squads.map(q=>{const miss=squadMissing(q,false);return`<label class="squad-pick ${miss.length?'incomplete':''}" ${miss.length?`title="Squad incompleta: falta ${E(miss.join(', '))}"`:''}><input type="radio" name="squadId" value="${E(q.id)}" ${p.squadId===q.id?'checked':''} ${miss.length?'disabled':''}><span class="squad-card">${squadCardInner(q)}</span></label>`;}).join('')}</div><span class="hint">Obrigatório. A operação usa a squad inteira: comandante, reconhecedores e operadores. Squads incompletas não podem ser escolhidas; complete-as no Squad Studio.</span></div>`;}
 function homeSwitch(projectId){
@@ -14199,7 +14230,7 @@ document.addEventListener('click',event=>{
   case 'bridge-test':{const form=$('#runtimeForm');if(form){const path=form.claudePath.value.trim();runtime().claudePath=path;}checkBridge(true).then(()=>{if(ui.modal==='settings')openSettings('claude');});break;}
   case 'settings-load':loadClaudeSettings();break;case 'settings-validate':validateSettingsText();break;case 'settings-save':saveClaudeSettings();break;
   case 'cmd-copy':{const text=$('#cmdPreview')?.textContent||'';navigator.clipboard?.writeText(text).then(()=>toast('Comando copiado.'),()=>toast('Não foi possível copiar. Selecione o texto manualmente.','error'));break;}
-  case 'home-open-project':homeOpenProject(agentId);break;case 'home-run':if(homeSwitch(agentId))startRun();break;case 'home-activity':ui.homeActivity=agentId||'';render();$(`.home-chip[data-id="${CSS.escape(ui.homeActivity)}"]`)?.focus();break;case 'home-open-features':if(homeSwitch(agentId))openFeatures();break;case 'home-open-briefing':if(homeSwitch(agentId))openBriefing();break;case 'home-open-teams':homeOpenTeams(agentId);break;case 'home-open-review':homeOpenReview(control.dataset.project,agentId);break;case 'home-agent':homeAgent(agentId);break;
+  case 'home-open-project':homeOpenProject(agentId);break;case 'home-run':if(homeSwitch(agentId))startRun();break;case 'home-repo-op':homeRepoOp(agentId);break;case 'home-repo-add':openSettings('repos');repoEdit('');break;case 'home-activity':ui.homeActivity=agentId||'';render();$(`.home-chip[data-id="${CSS.escape(ui.homeActivity)}"]`)?.focus();break;case 'home-open-features':if(homeSwitch(agentId))openFeatures();break;case 'home-open-briefing':if(homeSwitch(agentId))openBriefing();break;case 'home-open-teams':homeOpenTeams(agentId);break;case 'home-open-review':homeOpenReview(control.dataset.project,agentId);break;case 'home-agent':homeAgent(agentId);break;
   case 'city-shape':if(state.settings.squadView!=='office'){state.settings.cityShape=state.settings.cityShape==='planet'?'flat':'planet';save();render();}break;
   case 'squad-view':state.settings.squadView=['city','office'].includes(control.dataset.mode)?control.dataset.mode:state.settings.squadView==='office'?'city':'office';save();render();break;
   case 'console':openConsole();break;case 'console-pick':ui.consoleId=agentId;ui.consoleHistory=null;refreshConsole();break;case 'console-history':openConsoleHistory();break;case 'console-history-close':ui.consoleHistory=null;refreshConsole();break;case 'console-replay':replayRun(agentId);break;

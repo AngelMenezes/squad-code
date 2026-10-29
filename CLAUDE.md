@@ -211,7 +211,12 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   awaiting approval → `room`, reviews, pending merges one per operation and base branches gone one per repository → `home-open-features`;
   missing documentation stays on the cards), whose count is the header's "n itens aguardam sua ação". ATIVIDADE RECENTE lists every
   operation; with two or more, chips filter it by one (`home-activity`, `ui.homeActivity` transient, `homeActivityFilter` falls back to
-  all for a deleted operation; the filter runs before the 14-line cut; the picked chip gets the focus back after the render). The card also has **Abrir projeto**
+  all for a deleted operation; the filter runs before the 14-line cut; the picked chip gets the focus back after the render).
+  **REPOSITÓRIOS** (`homeReposHTML`, between operations and squads, only with the bridge and `ui.bridge.repos`): one card per
+  registered repository (`homeRepoCard`: team map from `loadTeamMap` (5 min) / `teamMapOf`, or the base branch gone (`baseCheckOf`,
+  then the primary button is "Trocar branch base" → Configurações > Repositórios), the operations on it as chips with their pending
+  merges, **Nova operação aqui** → `homeRepoOp`: `openOpNew` with `repoId` and `existing` set, so step 2 opens on that repository)
+  and a **Cadastrar repositório** card (`home-repo-add` → `openSettings('repos')` + `repoEdit('')`). The card also has **Abrir projeto**
   (`home-open-project`) and the Agent Teams icon (`home-open-teams` → `homeOpenTeams`: switches project, opens the operation page and
   `openAgentTeams`; without `liveMode()` it only shows the warning).
   Entering the Squad Studio or showing another squad (`ui.sqShown`, reset when the view changes) plays `sqBuild` once: the
