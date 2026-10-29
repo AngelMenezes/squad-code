@@ -206,7 +206,10 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   per repository) and pending merges → `home-open-features`; reviews → `home-open-review`; `runGaps` → `home-open-teams` live or
   `home-open-briefing`; a runnable current sprint (`depsReady`) or a done/empty one (→ `nextSprintOffer`) → `home-run`; blocked →
   `home-open-features`) as a `.home-next[data-tone]` strip and the primary button (`opNextButton`, also used by `homeRunHTML` when
-  idle). The `home-*` actions go through `homeSwitch`, which refuses during a run. The card also has **Abrir projeto**
+  idle). The `home-*` actions go through `homeSwitch`, which refuses during a run. Below the cards: **EM EXECUÇÃO** (`homeRunHTML`:
+  the run with its operation's code and name, or one idle line) and **AGUARDANDO SUA AÇÃO** (`homeActions`, every operation: the plan
+  awaiting approval → `room`, reviews, pending merges one per operation and base branches gone one per repository → `home-open-features`;
+  missing documentation stays on the cards), whose count is the header's "n itens aguardam sua ação". The card also has **Abrir projeto**
   (`home-open-project`) and the Agent Teams icon (`home-open-teams` → `homeOpenTeams`: switches project, opens the operation page and
   `openAgentTeams`; without `liveMode()` it only shows the warning).
   Entering the Squad Studio or showing another squad (`ui.sqShown`, reset when the view changes) plays `sqBuild` once: the
