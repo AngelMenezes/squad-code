@@ -18,9 +18,14 @@ python build.py [--copy]    # full build: regenerates src/avatars.js (needs Pill
 npm test                    # bridge tests: node --test tests/bridge.test.mjs (uses tests/fake-claude.mjs, no API cost)
 node --test --test-name-pattern "<test name>" tests/bridge.test.mjs   # single bridge test
 node --check src/app.js     # quick syntax check after edits
-python tests/ui_test.py     # optional UI tests (needs Playwright + Chromium; CHROMIUM_EXECUTABLE, SQUAD_PREVIEW_DIR)
+python tests/ui_test.py     # optional UI tests, demo mode (needs Playwright + Chromium; CHROMIUM_EXECUTABLE, SQUAD_PREVIEW_DIR)
+python tests/ui_bridge_test.py   # optional UI tests over a temporary bridge (node + git): first start, repositories, Painel
 node scripts/vendor-three.mjs [version]   # regenerate src/vendor/three.min.js (only classes in scripts/three-entry.js)
 ```
+
+UI tests read the built `index.html` (rebuild first), run with reduced motion and the low map quality (software WebGL in headless
+Chromium), and write `ui-results.json`/`ui-bridge-results.json` with the screenshots to `previews/` (git-ignored). With more than
+one operation the SQUAD tab asks whose squad to show (`view()` in the tests answers it).
 
 `index.html` is a build artifact — never edit it; edit `src/` and rebuild. Opening `index.html` via
 `file://` runs in demo mode (deterministic local simulation, no bridge). `npm run dev` does not

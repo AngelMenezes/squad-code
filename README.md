@@ -86,7 +86,7 @@ JDK, Go, Flutter, Rust, Docker... O app **não instala** nenhuma delas, mas veri
 |---|---|---|
 | **Python 3.9+** | `python build.py`: build completo (regenera os avatares e a cópia standalone) | [python.org/downloads](https://www.python.org/downloads/) |
 | **Pillow** | Converter `assets/*.png` na galeria de avatares (`pip install pillow`) | [pypi.org/project/pillow](https://pypi.org/project/pillow/) |
-| **Playwright para Python** + Chromium | Testes de interface (`tests/ui_test.py`) | [playwright.dev/python](https://playwright.dev/python/docs/intro) |
+| **Playwright para Python** + Chromium | Testes de interface (`tests/ui_test.py`, `tests/ui_bridge_test.py`) | [playwright.dev/python](https://playwright.dev/python/docs/intro) |
 
 O projeto tem **uma única dependência npm**, o `better-sqlite3` (banco SQLite local), instalada com `npm install`.
 
@@ -516,10 +516,11 @@ Testes de interface (opcionais):
 ```sh
 python -m pip install playwright
 python -m playwright install chromium
-python tests/ui_test.py
+python tests/ui_test.py          # modo demonstração, sem bridge
+python tests/ui_bridge_test.py   # com um bridge temporário (precisa de node e git): banco, repositórios, Painel
 ```
 
-`CHROMIUM_EXECUTABLE` indica outro Chromium e `SQUAD_PREVIEW_DIR` muda a pasta das capturas (padrão `previews/`).
+`CHROMIUM_EXECUTABLE` indica outro Chromium e `SQUAD_PREVIEW_DIR` muda a pasta das capturas e dos resultados (`ui-results.json`, `ui-bridge-results.json`; padrão `previews/`, fora do git). Rode `python build.py` (ou `npm run dev`) antes, pois os testes usam o `index.html` gerado.
 
 ---
 
