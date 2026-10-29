@@ -3300,8 +3300,15 @@ function homeActions(){
  return items;
 }
 function homeActionsHTML(items=homeActions()){return items.length?items.join(''):`<div class="home-empty">${icon('check')}Nada aguardando sua ação.</div>`;}
+// Recent activity of every operation, or of one (ui.homeActivity, transient; a deleted operation falls back to all). The filter comes
+// before the cut, so a quiet operation still shows its own latest lines.
+function homeActivityFilter(){const id=ui.homeActivity;return id&&state.projects.length>1&&state.projects.some(p=>p.id===id)?id:'';}
+function homeActivityChipsHTML(){
+ if(state.projects.length<2)return'';const cur=homeActivityFilter(),chip=(id,text,title)=>`<button type="button" class="home-chip" data-action="home-activity" data-id="${E(id)}" aria-pressed="${cur===id}"${title?` title="${E(title)}"`:''}>${E(text)}</button>`;
+ return`<div class="home-chips" role="group" aria-label="Filtrar a atividade por operação">${chip('','Todas')}${state.projects.map(p=>chip(p.id,p.code,p.name)).join('')}</div>`;
+}
 function homeActivityHTML(){
- const rows=state.projects.flatMap(p=>p.logs.map(l=>({p,l}))).sort((x,y)=>y.l.at.localeCompare(x.l.at)).slice(0,14);
+ const only=homeActivityFilter(),rows=state.projects.filter(p=>!only||p.id===only).flatMap(p=>p.logs.map(l=>({p,l}))).sort((x,y)=>y.l.at.localeCompare(x.l.at)).slice(0,14);
  if(!rows.length)return`<div class="home-empty">${icon('radio')}Canal em silêncio.</div>`;
  return rows.map(({p,l})=>`<div class="home-activity"><time>${clock(l.at)}</time><span class="home-activity-body"><strong>${E(p.code)} / ${E(agentById(l.agentId)?.name||'SISTEMA')}</strong><span>${E(l.message)}</span></span><span class="tag ${l.simulated?'':'accent'}">${l.simulated?'DEMO':'CLAUDE'}</span></div>`).join('');
 }
@@ -3313,7 +3320,7 @@ function renderHome(){
  root.innerHTML=`<div class="home-inner"><header class="home-head"><div><div class="eyebrow">SQUAD CODE / ${E(today)}</div><h1>PAINEL <span>GERAL.</span></h1><p>${state.projects.length} operação(ões), ${state.agents.length} agentes${review?`, <strong>${review} ${review>1?'itens aguardam':'item aguarda'} sua ação</strong>`:''}.</p></div><div class="flex wrap home-actions"><button class="btn ghost" data-action="agent-new">${icon('plus')}Novo agente</button><button class="btn ghost" data-action="project-new">${icon('project')}Nova operação</button><button class="btn primary" data-action="view" data-view="network">${icon('arrow')}Abrir rede do squad</button></div></header>
 <section class="home-section home-projects-wrap"><div class="home-section-head"><span>OPERAÇÕES</span><span>${pad(state.projects.length)}</span></div><div class="home-projects">${state.projects.map(homeProjectCard).join('')}<button class="home-project new" data-action="project-new">${icon('plus')}<strong>Nova operação</strong><small>Nome do projeto e squad.</small></button></div></section><section class="home-section home-squads-wrap"><div class="home-section-head"><span>SQUADS</span><span class="flex">${pad(state.squads.length)}<button class="link-button" data-action="squad-studio">SQUAD STUDIO ${icon('chevron')}</button></span></div><div class="home-squads">${homeSquadsHTML()}</div></section>
 <div class="home-grid"><section class="home-section"><div class="home-section-head"><span>EM EXECUÇÃO</span>${runner?'<i class="dot"></i>':''}</div>${homeRunHTML()}<div class="home-section-head" style="margin-top:22px"><span>AGUARDANDO SUA AÇÃO</span><span>${pad(review)}</span></div><div class="home-list">${homeActionsHTML(actions)}</div></section>
-<section class="home-section"><div class="home-section-head"><span>ATIVIDADE RECENTE</span><button class="link-button" data-action="logs">VER TRANSMISSÕES ${icon('chevron')}</button></div><div class="home-list home-activity-list">${homeActivityHTML()}</div></section></div></div>`;
+<section class="home-section"><div class="home-section-head"><span>ATIVIDADE RECENTE</span><button class="link-button" data-action="logs">VER TRANSMISSÕES ${icon('chevron')}</button></div>${homeActivityChipsHTML()}<div class="home-list home-activity-list">${homeActivityHTML()}</div></section></div></div>`;
  root.scrollTop=scroll;
 }
 /* PROJETOS page: operations list + inline briefing + features of the active operation.
@@ -3767,7 +3774,7 @@ document.addEventListener('click',event=>{
   case 'bridge-test':{const form=$('#runtimeForm');if(form){const path=form.claudePath.value.trim();runtime().claudePath=path;}checkBridge(true).then(()=>{if(ui.modal==='settings')openSettings('claude');});break;}
   case 'settings-load':loadClaudeSettings();break;case 'settings-validate':validateSettingsText();break;case 'settings-save':saveClaudeSettings();break;
   case 'cmd-copy':{const text=$('#cmdPreview')?.textContent||'';navigator.clipboard?.writeText(text).then(()=>toast('Comando copiado.'),()=>toast('Não foi possível copiar. Selecione o texto manualmente.','error'));break;}
-  case 'home-open-project':homeOpenProject(agentId);break;case 'home-run':if(homeSwitch(agentId))startRun();break;case 'home-open-features':if(homeSwitch(agentId))openFeatures();break;case 'home-open-briefing':if(homeSwitch(agentId))openBriefing();break;case 'home-open-teams':homeOpenTeams(agentId);break;case 'home-open-review':homeOpenReview(control.dataset.project,agentId);break;case 'home-agent':homeAgent(agentId);break;
+  case 'home-open-project':homeOpenProject(agentId);break;case 'home-run':if(homeSwitch(agentId))startRun();break;case 'home-activity':ui.homeActivity=agentId||'';render();$(`.home-chip[data-id="${CSS.escape(ui.homeActivity)}"]`)?.focus();break;case 'home-open-features':if(homeSwitch(agentId))openFeatures();break;case 'home-open-briefing':if(homeSwitch(agentId))openBriefing();break;case 'home-open-teams':homeOpenTeams(agentId);break;case 'home-open-review':homeOpenReview(control.dataset.project,agentId);break;case 'home-agent':homeAgent(agentId);break;
   case 'city-shape':if(state.settings.squadView!=='office'){state.settings.cityShape=state.settings.cityShape==='planet'?'flat':'planet';save();render();}break;
   case 'squad-view':state.settings.squadView=['city','office'].includes(control.dataset.mode)?control.dataset.mode:state.settings.squadView==='office'?'city':'office';save();render();break;
   case 'console':openConsole();break;case 'console-pick':ui.consoleId=agentId;ui.consoleHistory=null;refreshConsole();break;case 'console-history':openConsoleHistory();break;case 'console-history-close':ui.consoleHistory=null;refreshConsole();break;case 'console-replay':replayRun(agentId);break;

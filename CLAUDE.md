@@ -209,7 +209,9 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   idle). The `home-*` actions go through `homeSwitch`, which refuses during a run. Below the cards: **EM EXECUÇÃO** (`homeRunHTML`:
   the run with its operation's code and name, or one idle line) and **AGUARDANDO SUA AÇÃO** (`homeActions`, every operation: the plan
   awaiting approval → `room`, reviews, pending merges one per operation and base branches gone one per repository → `home-open-features`;
-  missing documentation stays on the cards), whose count is the header's "n itens aguardam sua ação". The card also has **Abrir projeto**
+  missing documentation stays on the cards), whose count is the header's "n itens aguardam sua ação". ATIVIDADE RECENTE lists every
+  operation; with two or more, chips filter it by one (`home-activity`, `ui.homeActivity` transient, `homeActivityFilter` falls back to
+  all for a deleted operation; the filter runs before the 14-line cut; the picked chip gets the focus back after the render). The card also has **Abrir projeto**
   (`home-open-project`) and the Agent Teams icon (`home-open-teams` → `homeOpenTeams`: switches project, opens the operation page and
   `openAgentTeams`; without `liveMode()` it only shows the warning).
   Entering the Squad Studio or showing another squad (`ui.sqShown`, reset when the view changes) plays `sqBuild` once: the

@@ -154,6 +154,11 @@ body:not(.reduce-motion) .map-node.selected .node-icon{animation:sel-icon 2.8s e
 .home-grid{display:grid;grid-template-columns:1.15fr 1fr 1fr;gap:28px;align-items:start}
 .home-list{display:flex;flex-direction:column;gap:6px}
 .home-activity-list{max-height:520px;overflow:auto;padding-right:4px}
+.home-run.idle{flex-wrap:nowrap}.home-run.idle>span{flex:1;min-width:0}
+.home-chips{display:flex;flex-wrap:wrap;gap:6px;margin:-4px 0 10px}
+.home-chip{font:9px var(--mono);letter-spacing:.8px;padding:5px 9px;border:1px solid #ffffff1c;background:#ffffff05;color:var(--muted);cursor:pointer}
+.home-chip:hover{border-color:#30c5e866;color:var(--ink)}
+.home-chip[aria-pressed=true]{border-color:var(--cyan);background:#30c5e814;color:var(--cyan)}
 .home-empty{display:flex;align-items:center;gap:10px;padding:16px;border:1px dashed #ffffff1c;color:var(--muted);font-size:11px}
 .home-empty .icon{width:15px;height:15px;color:var(--cyan)}
 .home-run{display:flex;align-items:center;gap:14px;padding:14px;border:1px solid #ffffff1c;background:#ffffff05;flex-wrap:wrap}
