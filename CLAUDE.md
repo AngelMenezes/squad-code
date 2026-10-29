@@ -201,8 +201,14 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   The SQUAD tab (nav button, Painel "Abrir rede do squad", Q/E) goes through `openSquadView`: with more than one operation and no
   run it asks whose squad to show (modal kind `op-pick`, `squad-view-op` → `squadViewOp` = `homeSwitch` + `goView('network')`);
   entry points that already name the operation ("Abrir no squad", agent links) go straight to the map.
-  Painel project cards (`homeProjectCard`) have **Abrir projeto** (`home-open-project`) and **Abrir times** (`home-open-teams` →
-  `homeOpenTeams`: switches project, opens the operation page and `openAgentTeams`; without `liveMode()` it only shows the warning).
+  Painel project cards (`homeProjectCard`) show the operation's next step (`opNextStep(p)` → `{tone, label, detail, action, icon,
+  text}`, first rule wins: run of this operation → `room`; base branch gone (`baseCheckOf`, `renderHome` calls `loadBaseCheck` once
+  per repository) and pending merges → `home-open-features`; reviews → `home-open-review`; `runGaps` → `home-open-teams` live or
+  `home-open-briefing`; a runnable current sprint (`depsReady`) or a done/empty one (→ `nextSprintOffer`) → `home-run`; blocked →
+  `home-open-features`) as a `.home-next[data-tone]` strip and the primary button (`opNextButton`, also used by `homeRunHTML` when
+  idle). The `home-*` actions go through `homeSwitch`, which refuses during a run. The card also has **Abrir projeto**
+  (`home-open-project`) and the Agent Teams icon (`home-open-teams` → `homeOpenTeams`: switches project, opens the operation page and
+  `openAgentTeams`; without `liveMode()` it only shows the warning).
   Entering the Squad Studio or showing another squad (`ui.sqShown`, reset when the view changes) plays `sqBuild` once: the
   command tree draws itself (trunk with a spark, band lines, labels, buses, stubs, nodes), timed from the real layout through
   CSS custom properties under `.sq-build`, which is dropped at the end so the ambient pulses resume. Re-renders never replay it.
