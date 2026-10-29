@@ -301,6 +301,9 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   squad in use); `project.agentIds`/`commanderId` are **derived mirrors** kept by `applySquad`/`syncSquad` —
   change membership through the squad, not the project. Projects also carry documentation fields (`vision`,
   `scopeIn`, `scopeOut`, `glossary`, `architecture`, `adrs[]`) and features carry `tasks`.
+- Operation codes (`OP-001`...) are never reused: `blankProject` takes `nextOpCode()` (highest of `settings.opSeq` and the codes in
+  use, plus one) and `addProject` (the only `state.projects.push`) records it in `settings.opSeq` (persisted; `normalizeWorkspace`
+  keeps the larger of the stored value and the codes in the backup). Existing codes are never renumbered: folders carry them.
 - Project folder: `project.folder` (persisted, `projectFolderName` = `<code>-<name>` slug, unique; `normalizeWorkspace` derives it
   for older backups) is set once by `createOperation` at creation and never follows a rename; deleting the project keeps the folder on
   disk. `runOptionsFor(a,r,p)` sends it as `project`, so live steps and chats run in `projects/<folder>` (`projectDirLabel` shows
