@@ -35,6 +35,14 @@ process.stdin.on('end', () => {
   if (input.includes('FAIL')) { process.stderr.write('fake failure\n'); emit({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'fake failure', session_id: 'fake-session' }); process.exit(1); }
   // WRITE:<path> in the prompt: write that file in the cwd, as an agent's edit would.
   for (const [, file] of input.matchAll(/WRITE:([\w./-]+)/g)) { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, `escrito pelo agente: ${file}\n`); }
+  // IMAGE in the prompt: read an image and a PDF, as Claude Code streams them (base64 in the tool_result and in tool_use_result).
+  if (input.includes('IMAGE')) {
+    const png = 'iVBORw0KGgoFAKEIMAGE' + 'A'.repeat(200_000), pdf = 'JVBERi0xFAKEPDF' + 'B'.repeat(300_000);
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'img-1', name: 'Read', input: { file_path: '.squad-code/anexos/tela.png' } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'img-1', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }] }] }, tool_use_result: { type: 'image', file: { base64: png, type: 'image/png', originalSize: 150_000, dimensions: { width: 1568, height: 900 } } } });
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'pdf-1', name: 'Read', input: { file_path: 'spec.pdf' } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'pdf-1', content: [{ type: 'text', text: 'PDF lido' }, { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf } }] }] }, tool_use_result: { type: 'pdf', file: { filePath: 'spec.pdf', base64: pdf, originalSize: 225_000 } } });
+  }
   emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'README.md' } }] } });
   if (args.includes('--include-partial-messages')) for (const text of ['wor', 'king']) emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } });

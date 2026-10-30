@@ -478,6 +478,35 @@ test('run history survives a restart; a run cut by a dead bridge comes back inte
   await b.stop();
 });
 
+test('images and PDFs an agent reads leave the events as a short note: not in memory, the page stream or the history', async () => {
+  const dir = tmp('squad-media-'); extraDirs.push(dir);
+  let b = await startBridge(dir);
+  let res = await b.api('/api/setup', { method: 'POST', body: JSON.stringify({ version: 2, agents: [], projects: [{ id: 'p1', name: 'Mídia' }], squads: [] }) });
+  assert.equal(res.status, 201);
+  res = await b.api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'IMAGE', options: { cwd: workdir }, meta: { projectId: 'p1', kind: 'step' } }) });
+  const id = (await res.json()).runId;
+  const live = await collect(id, b.base, b.token);
+  const check = events => {
+    const text = JSON.stringify(events);
+    assert.ok(!text.includes('FAKEIMAGE') && !text.includes('FAKEPDF'), 'no base64 left');
+    assert.ok(text.length < 20_000, `events stay small (${text.length})`);
+    const results = events.filter(e => e.type === 'user').flatMap(e => e.message.content);
+    assert.match(results.find(r => r.tool_use_id === 'img-1').content[0].text, /imagem lida pelo agente \(image\/png, \d+ KB\)/);
+    const pdf = results.find(r => r.tool_use_id === 'pdf-1').content;
+    assert.equal(pdf[0].text, 'PDF lido');
+    assert.match(pdf[1].text, /documento lido pelo agente \(application\/pdf/);
+    const extra = events.find(e => e.tool_use_result?.type === 'image').tool_use_result;
+    assert.equal(extra.file.dimensions.width, 1568);
+    assert.match(extra.file.base64, /^\[omitido: \d+ KB\]$/);
+  };
+  check(live);
+  assert.equal(live.at(-1).type, 'exit');
+  await b.stop();
+  b = await startBridge(dir);
+  check(await collect(id, b.base, b.token));
+  await b.stop();
+});
+
 test('operation room messages are saved incrementally, trimmed and handed to the page', async () => {
   const ws = { version: 2, agents: [{ id: 'a1', name: 'VANGUARD', role: 'commander' }], projects: [{ id: 'p1', name: 'Um', features: [{ id: 'f1', title: 'Login' }] }], squads: [] };
   assert.equal((await api('/api/workspace?force=1', { method: 'PUT', body: JSON.stringify(ws) })).status, 200);
@@ -1313,4 +1342,55 @@ test('feature attachments: stored apart, written in the step folder out of git, 
   assert.equal((await api('/api/workspace?force=1', { method: 'PUT', body: JSON.stringify({ ...ws, projects: [{ id: 'p1', name: 'Um', features: [] }] }) })).status, 200);
   await page();
   assert.deepEqual((await (await api(`/api/attachments?ids=${a1}`)).json()).ids, []);
+});
+
+test('images and PDFs as feature attachments: checked by content, written as bytes, described, served raw for thumbnails', async () => {
+  const ws = { version: 2, agents: [], projects: [{ id: 'p1', name: 'Um', features: [{ id: 'f2', title: 'Checkout' }] }], squads: [] };
+  assert.equal((await api('/api/workspace?force=1', { method: 'PUT', body: JSON.stringify(ws) })).status, 200);
+  const att = body => api('/api/attachments', { method: 'POST', body: JSON.stringify({ projectId: 'p1', featureId: 'f2', ...body }) });
+  const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(64, 7)]), pdf = Buffer.from('%PDF-1.7\n%fake\n');
+  // The extension follows the type (the agent's Read tool goes by it); the description becomes one clean line.
+  let r = await (await att({ name: 'tela', mime: 'image/png', data: png.toString('base64'), note: '  Tela de checkout,\n Figma v3 ' })).json();
+  assert.deepEqual([r.attachment.name, r.attachment.mime, r.attachment.size, r.attachment.note], ['tela.png', 'image/png', png.length, 'Tela de checkout, Figma v3']);
+  const img = r.attachment.id;
+  const spec = (await (await att({ name: 'contrato.PDF', mime: 'application/pdf', data: pdf.toString('base64') })).json()).attachment;
+  assert.equal(spec.name, 'contrato.PDF');
+  // Content that is not the type, a type outside the list, an image over 1,5 MB and a PDF over 5 MB are refused.
+  assert.equal((await att({ name: 'x.png', mime: 'image/png', data: pdf.toString('base64') })).status, 415);
+  assert.equal((await att({ name: 'x.svg', mime: 'image/svg+xml', data: Buffer.from('<svg/>').toString('base64') })).status, 415);
+  assert.equal((await att({ name: 'x.png', mime: 'image/png', data: Buffer.concat([png, Buffer.alloc(1.5 * 1024 * 1024)]).toString('base64') })).status, 413);
+  r = await att({ name: 'x.pdf', mime: 'application/pdf', data: Buffer.concat([pdf, Buffer.alloc(5 * 1024 * 1024)]).toString('base64') });
+  assert.deepEqual([r.status, (await r.json()).error], [413, 'O PDF passa de 5 MB.']);
+  // The file itself for a thumbnail (an <img> sends the token in the query), or base64 in the JSON.
+  let res = await fetch(`${BASE}/api/attachments/${img}?raw=1&token=${token}`);
+  assert.deepEqual([res.status, res.headers.get('content-type'), res.headers.get('content-security-policy')], [200, 'image/png', 'sandbox']);
+  assert.ok(Buffer.from(await res.arrayBuffer()).equals(png));
+  assert.equal((await (await api(`/api/attachments/${spec.id}`)).json()).attachment.data, pdf.toString('base64'));
+  // The description can change later.
+  assert.equal((await (await api(`/api/attachments/${img}`, { method: 'PATCH', body: JSON.stringify({ note: 'Tela de checkout, Figma v4' }) })).json()).note, 'Tela de checkout, Figma v4');
+  assert.equal((await api('/api/attachments/at00000000000000ff', { method: 'PATCH', body: JSON.stringify({ note: 'x' }) })).status, 404);
+  // A step gets the bytes in its folder and the prompt says what each one is and how to open it.
+  res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'olhar', options: { project: 'op-096-midia', attachments: [img, spec.id] } }) });
+  assert.equal(res.status, 201);
+  const ev = await collect((await res.json()).runId);
+  const dir = path.join(projectsRoot, 'op-096-midia', '.squad-code', 'anexos');
+  assert.ok(readFileSync(path.join(dir, 'tela.png')).equals(png));
+  assert.ok(readFileSync(path.join(dir, 'contrato.PDF')).equals(pdf));
+  assert.match(ev.at(-1).result, /- \.squad-code\/anexos\/tela\.png \(imagem, 72 bytes\): Tela de checkout, Figma v4\n- \.squad-code\/anexos\/contrato\.PDF \(PDF, 15 bytes\)\n/);
+  assert.match(ev.at(-1).result, /abra com a ferramenta Read/);
+});
+
+test('a database from before images keeps its text attachments (migration 3)', async () => {
+  const dir = tmp('squad-attach-v2-'); extraDirs.push(dir);
+  let b = await startBridge(dir);
+  assert.equal((await b.api('/api/setup', { method: 'POST', body: JSON.stringify({ version: 2, agents: [], projects: [{ id: 'p1', name: 'Um', features: [{ id: 'f1', title: 'A' }] }], squads: [] }) })).status, 201);
+  await b.stop();
+  const db = new Database(path.join(dir, 'squad.db'));
+  db.exec('ALTER TABLE attachments DROP COLUMN mime; ALTER TABLE attachments DROP COLUMN data; ALTER TABLE attachments DROP COLUMN note;');
+  db.prepare('INSERT INTO attachments VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('at00000000000000a1', 'p1', 'f1', 'notas.md', 8, 'x', '2026-01-01', '# Notas\n');
+  db.pragma('user_version = 2'); db.close();
+  b = await startBridge(dir);
+  const a = (await (await b.api('/api/attachments/at00000000000000a1')).json()).attachment;
+  assert.deepEqual([a.text, a.mime, a.note, a.data], ['# Notas\n', 'text/plain', '', undefined]);
+  await b.stop();
 });

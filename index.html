@@ -1016,7 +1016,27 @@ body:has(#modalRoot .overlay) #sqPopRoot{visibility:hidden}
 .fe-attach-add{cursor:pointer;letter-spacing:0}
 .fe-attach .hint{margin-top:8px}
 .fe-attach-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
-.fe-attach-list li{display:flex;align-items:center;gap:9px;border:1px solid #ffffff1a;padding:5px 6px 5px 10px;font-size:11.5px;min-width:0}
+.fe-attach-list li{display:flex;align-items:flex-start;gap:9px;border:1px solid #ffffff1a;padding:5px 6px 5px 10px;font-size:11.5px;min-width:0}
+.fe-attach{transition:background .14s,outline-color .14s;outline:1px dashed transparent;outline-offset:4px}
+.fe-attach.drop{outline-color:var(--cyan);background:#30c5e80d}
+.fe-attach-list li>.icon{margin-top:5px}
+.fe-attach-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.fe-attach-row{display:flex;align-items:center;gap:9px;min-width:0}
+.fe-attach-note{width:100%;background:transparent;border:1px solid #ffffff12;color:var(--ink);font-size:11px;padding:3px 7px}
+.fe-attach-note::placeholder{color:var(--dim)}
+.fe-attach-desc{font-size:11px;color:var(--muted)}
+.fe-attach-thumb{flex:none;width:56px;height:40px;display:block;border:1px solid #ffffff1a;background:#0d1113;overflow:hidden}
+.fe-attach-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.fe-attach-pending.media{border-color:#30c5e855;background:#0b1518}
+.fe-attach-preview{display:flex;align-items:center;gap:12px;min-width:0}
+.fe-attach-preview img{width:120px;max-height:90px;object-fit:contain;border:1px solid #ffffff1a;background:#0d1113;flex:none}
+.fe-attach-preview>.icon{width:28px;height:28px;color:var(--cyan)}
+.fe-attach-preview small{display:block;color:var(--muted)}
+.fe-attach-preview b{word-break:break-all}
+.fe-attach-notefield{display:flex!important;flex-direction:column;align-items:stretch!important;gap:4px!important;font:600 9px var(--mono);letter-spacing:1.5px;color:var(--muted);cursor:default!important}
+.fe-attach-notefield input{background:#080a0b;border:1px solid #ffffff26;color:var(--ink);font:12px var(--sans);letter-spacing:0;padding:6px 8px}
+.fe-attach-warn{display:flex;gap:7px;align-items:flex-start;color:#e8c070}
+.fe-attach-warn .icon{width:14px;height:14px;flex:none;margin-top:2px}
 .fe-attach-list li>.icon{width:14px;height:14px;flex:none;color:var(--cyan)}
 .fe-attach-name{font:600 11px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .fe-attach-list small{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -10909,7 +10929,7 @@ function normalizeWorkspace(raw){
   if(!p||!Array.isArray(p.features)||p.features.length>150)throw Error('Projeto ou quantidade de features inválidos.');
   const ids=arr(p.agentIds,80).filter(a=>agentIds.has(a));
   const sprints=arr(p.sprints,50).filter(s=>s&&typeof s==='object').map(s=>({id:validId(s.id),name:str(s.name,60)||'Sprint',goal:str(s.goal,2000)}));if(!sprints.length)sprints.push(createSprint(1));const sprintIds=new Set(sprints.map(s=>s.id));
-  const features=p.features.map(f=>{if(!f)throw Error('Feature inválida.');return{id:validId(f.id),key:str(f.key,15),title:str(f.title,120)||'Sem título',description:str(f.description,8000),criteria:str(f.criteria,8000),scope:Object.hasOwn(SCOPES,f.scope)?f.scope:LEGACY_SCOPES[f.scope]||'fullstack',priority:['P0','P1','P2'].includes(f.priority)?f.priority:'P1',status:Object.hasOwn(STATUS,f.status)?(f.status==='running'?'ready':f.status):'backlog',dependencies:arr(f.dependencies,150).map(ref),route:arr(f.route,80).filter(a=>ids.includes(a)),currentAgentId:null,step:0,outputs:arr(f.outputs,300).filter(o=>o&&typeof o==='object').map(o=>({agentId:ref(o.agentId),at:date(o.at),text:str(o.text,40000),simulated:o.simulated!==false,error:o.error===true,costUsd:Number.isFinite(o.costUsd)?o.costUsd:null,durationMs:Number.isFinite(o.durationMs)?o.durationMs:null,sessionId:ref(o.sessionId)||null})),context:str(f.context,10000),tasks:str(f.tasks,8000),sprintId:sprintIds.has(f.sprintId)?f.sprintId:sprints[0].id,briefs:arr(f.briefs,80).map(b=>str(b,2000)),setup:f.setup===true,mapUpdate:f.mapUpdate===true,merge:f.merge&&typeof f.merge==='object'&&/^squad\/[a-z0-9][a-z0-9-]{0,79}$/.test(f.merge.branch)?{branch:f.merge.branch,state:f.merge.state==='merged'?'merged':'pending',at:typeof f.merge.at==='string'?f.merge.at.slice(0,40):''}:null,attachments:arr(f.attachments,20).filter(x=>x&&typeof x==='object'&&/^at[0-9a-f]{16}$/.test(x.id)).map(x=>({id:x.id,name:str(x.name,120)||'anexo.txt',size:Number.isFinite(x.size)?x.size:0,sha:str(x.sha,40),at:str(x.at,40),summary:str(x.summary,1500),masked:Number.isInteger(x.masked)&&x.masked>0?x.masked:0}))};});
+  const features=p.features.map(f=>{if(!f)throw Error('Feature inválida.');return{id:validId(f.id),key:str(f.key,15),title:str(f.title,120)||'Sem título',description:str(f.description,8000),criteria:str(f.criteria,8000),scope:Object.hasOwn(SCOPES,f.scope)?f.scope:LEGACY_SCOPES[f.scope]||'fullstack',priority:['P0','P1','P2'].includes(f.priority)?f.priority:'P1',status:Object.hasOwn(STATUS,f.status)?(f.status==='running'?'ready':f.status):'backlog',dependencies:arr(f.dependencies,150).map(ref),route:arr(f.route,80).filter(a=>ids.includes(a)),currentAgentId:null,step:0,outputs:arr(f.outputs,300).filter(o=>o&&typeof o==='object').map(o=>({agentId:ref(o.agentId),at:date(o.at),text:str(o.text,40000),simulated:o.simulated!==false,error:o.error===true,costUsd:Number.isFinite(o.costUsd)?o.costUsd:null,durationMs:Number.isFinite(o.durationMs)?o.durationMs:null,sessionId:ref(o.sessionId)||null})),context:str(f.context,10000),tasks:str(f.tasks,8000),sprintId:sprintIds.has(f.sprintId)?f.sprintId:sprints[0].id,briefs:arr(f.briefs,80).map(b=>str(b,2000)),setup:f.setup===true,mapUpdate:f.mapUpdate===true,merge:f.merge&&typeof f.merge==='object'&&/^squad\/[a-z0-9][a-z0-9-]{0,79}$/.test(f.merge.branch)?{branch:f.merge.branch,state:f.merge.state==='merged'?'merged':'pending',at:typeof f.merge.at==='string'?f.merge.at.slice(0,40):''}:null,attachments:arr(f.attachments,20).filter(x=>x&&typeof x==='object'&&/^at[0-9a-f]{16}$/.test(x.id)).map(x=>({id:x.id,name:str(x.name,120)||'anexo.txt',size:Number.isFinite(x.size)?x.size:0,sha:str(x.sha,40),at:str(x.at,40),summary:str(x.summary,1500),masked:Number.isInteger(x.masked)&&x.masked>0?x.masked:0,mime:str(x.mime,40),note:str(x.note,500)}))};});
   const featureIds=new Set(features.map(f=>f.id));features.forEach(f=>{f.dependencies=[...new Set(f.dependencies.filter(d=>featureIds.has(d)&&d!==f.id))];if(f.briefs.length!==f.route.length)f.briefs=[];if(!f.route.length&&['ready','blocked'].includes(f.status))f.status='backlog';});
   if(hasCycle(features))throw Error('As dependências do backup formam um ciclo.');
   return{id:validId(p.id),code:str(p.code,20),name:str(p.name,70)||'Novo projeto',folder:str(p.folder,80),repoId:typeof p.repoId==='string'&&/^[a-z0-9][a-z0-9-]{0,79}$/.test(p.repoId)?p.repoId:'',reconMode:['direct','team'].includes(p.reconMode)?p.reconMode:'map',remote:typeof p.remote==='string'?p.remote.trim().slice(0,500):'',published:p.published&&typeof p.published==='object'&&p.published.commit?{at:date(p.published.at),branch:str(p.published.branch,100),commit:str(p.published.commit,40)}:null,codeStandard:p.codeStandard==='squad'?'squad':'repo',briefing:str(p.briefing,20000),vision:str(p.vision,8000),scopeIn:str(p.scopeIn,8000),scopeOut:str(p.scopeOut,8000),glossary:str(p.glossary,8000),architecture:str(p.architecture,12000),adrs:arr(p.adrs,50).filter(x=>x&&typeof x==='object').map(x=>({id:ref(x.id)||id('adr'),title:str(x.title,120),status:ADR_STATUS.includes(x.status)?x.status:'Proposto',date:/^\d{4}-\d{2}-\d{2}$/.test(x.date||'')?x.date:'',content:str(x.content,12000)})).filter(x=>x.title),squadId:ref(p.squadId),commanderId:ids.includes(p.commanderId)&&agents.find(a=>a.id===p.commanderId)?.role==='commander'?p.commanderId:'',agentIds:[...new Set(ids)],sprints,features,logs:arr(p.logs,500).filter(l=>l&&typeof l==='object').map(l=>({id:keepId(l.id,'event'),at:date(l.at),agentId:ref(l.agentId)||null,type:['system','plan','agent','handoff','review'].includes(l.type)?l.type:'system',message:str(l.message,3000),simulated:l.simulated!==false})),handoffs:arr(p.handoffs,500).filter(h=>h&&agentIds.has(h.from)&&agentIds.has(h.to)).map(h=>({id:keepId(h.id,'handoff'),at:date(h.at),from:h.from,to:h.to,featureId:ref(h.featureId),context:str(h.context,10000),manual:!!h.manual,simulated:h.simulated!==false})),createdAt:date(p.createdAt)};
@@ -11887,17 +11907,24 @@ ${FE_MD.map(def=>feMdFieldHTML(def,f[def.field]||'')).join('')}
 <section class="fe-attach" id="feAttach">${feAttachHTML(f)}</section>
 </form>${feChatHTML(a,model,live)}</div>`;
 }
-/* Feature attachments (a collection, a contract the team sent): the text goes to the database through the bridge and the feature
- * keeps {id, name, size, sha, at, summary, masked}. Steps send the ids and the bridge writes the files in the agent's folder, out of
- * git; the commander's plan and the co-writing chat (no tools) get the summary. Saved at once, not with "Salvar feature". */
-const ATTACH_MAX=512*1024,ATTACH_LIMIT=20,ATTACH_MASK='***MASCARADO***';
+/* Feature attachments (a collection, a contract the team sent, a screenshot, a spec in PDF): the file goes to the database through
+ * the bridge and the feature keeps {id, name, size, sha, at, summary, masked, mime, note}. Steps send the ids and the bridge writes the
+ * files in the agent's folder, out of git; the commander's plan and the co-writing chat (no tools) get the summary and the person's
+ * description. Images are reduced in the page (ATTACH_IMG_SIDE, the most the model looks at) and, like PDFs, wait in place for a
+ * description and a look for sensitive data before going (they cannot be masked). Saved at once, not with "Salvar feature". */
+const ATTACH_MAX=512*1024,ATTACH_LIMIT=20,ATTACH_MASK='***MASCARADO***',ATTACH_IMG_MAX=1.5*1024*1024,ATTACH_PDF_MAX=5*1024*1024,ATTACH_IMG_SIDE=1568;
+const ATTACH_IMG_TYPES=['image/png','image/jpeg','image/gif','image/webp'];
+function attachKind(x){const m=x?.mime||'';return m==='application/pdf'?'pdf':ATTACH_IMG_TYPES.includes(m)?'image':'text';}
+function attachRaw(attId){return`/api/attachments/${encodeURIComponent(attId)}?raw=1&token=${encodeURIComponent(BRIDGE_TOKEN)}`;}
+function attachSize(n){return n<1024?`${n} B`:n<1048576?`${Math.round(n/1024)} KB`:`${(n/1048576).toFixed(1).replace('.',',')} MB`;}
 function feAttachHTML(f){
  const list=f.attachments||[],p=ui.attachPending,missing=ui.attachMissing||new Set(),on=!!BRIDGE_TOKEN&&ui.bridge.online;
- const kb=n=>n<1024?`${n} B`:`${Math.round(n/1024)} KB`;
+ const item=x=>{const k=attachKind(x),gone=missing.has(x.id);return`<li class="kind-${k}${gone?' missing':''}">${k==='image'&&!gone&&on?`<a class="fe-attach-thumb" href="${attachRaw(x.id)}" target="_blank" rel="noopener" title="Abrir ${E(x.name)}"><img src="${attachRaw(x.id)}" alt="" loading="lazy"></a>`:icon('file')}<div class="fe-attach-main"><div class="fe-attach-row"><span class="fe-attach-name" title="${E(x.summary||x.name)}">${E(x.name)}</span><small>${k==='pdf'?'PDF · ':k==='image'?'imagem · ':''}${attachSize(x.size)}${x.masked?` · ${x.masked} segredo${x.masked===1?'':'s'} mascarado${x.masked===1?'':'s'}`:''}${gone?' · indisponível neste computador, envie de novo':''}</small>${on?`<button type="button" class="btn ghost sm square" data-action="fe-attach-remove" data-id="${E(x.id)}" aria-label="Remover ${E(x.name)}" title="Remover anexo">${icon('trash')}</button>`:''}</div>${on&&!gone?`<input class="fe-attach-note" data-id="${E(x.id)}" value="${E(x.note||'')}" maxlength="500" autocomplete="off" placeholder="${k==='text'?'Descrição (opcional)':'O que o arquivo mostra (opcional; o comandante planeja só por esta descrição)'}" aria-label="Descrição de ${E(x.name)}">`:x.note?`<p class="fe-attach-desc">${E(x.note)}</p>`:''}</div></li>`;};
+ const media=p?.kind==='media'?`<div class="fe-attach-pending media" role="group" aria-label="Anexar ${E(p.name)}"><div class="fe-attach-preview">${p.preview?`<img src="${p.preview}" alt="">`:icon('file')}<div><b>${E(p.name)}</b><small>${p.type==='pdf'?'PDF':'Imagem'} · ${attachSize(p.size)}${p.dims?` · ${p.dims}`:''}${p.resized?` · reduzida de ${p.resized}`:''}${p.pages?` · ${p.pages} página${p.pages===1?'':'s'}`:''}</small></div></div><label class="fe-attach-notefield">Descrição (opcional)<input id="feAttachNote" maxlength="500" autocomplete="off" placeholder="${p.type==='pdf'?'Ex.: especificação da API de pagamentos, v2':'Ex.: tela de checkout do Figma, versão aprovada'}"></label><p class="fe-attach-warn">${icon('shield')}<span>Confira se ${p.type==='pdf'?'o PDF':'a imagem'} não mostra tokens, senhas, dados pessoais de clientes (LGPD) ou endereços internos: ${p.type==='pdf'?'PDFs':'imagens'} não são mascarad${p.type==='pdf'?'os':'as'}.</span></p><div class="fe-attach-actions"><button type="button" class="btn ghost sm" data-action="fe-attach-cancel">Cancelar</button><button type="button" class="btn primary sm" data-action="fe-attach-confirm">${icon('check')}Anexar</button></div></div>`:'';
  return`<header class="fe-attach-head"><span>ANEXOS</span><small>${list.length?`${list.length} arquivo${list.length===1?'':'s'}`:'nenhum'}</small><span class="grow"></span>${on?`<label class="btn ghost sm fe-attach-add"${list.length>=ATTACH_LIMIT?' hidden':''}>${icon('upload')}Anexar arquivo<input type="file" id="feAttachInput" multiple hidden></label>`:''}</header>
 ${on?'':'<p class="hint">Anexos precisam do bridge (npm start): os agentes os leem na pasta da operação.</p>'}
-${p?`<div class="fe-attach-pending" role="group" aria-label="Segredos encontrados"><p><b>${E(p.name)}</b>: encontrei possíveis segredos (${E(p.found.join(', '))}).</p><label><input type="checkbox" id="feAttachMask" checked> Mascarar antes de anexar (${E(ATTACH_MASK)})</label><div class="fe-attach-actions"><button type="button" class="btn ghost sm" data-action="fe-attach-cancel">Cancelar</button><button type="button" class="btn primary sm" data-action="fe-attach-confirm">${icon('check')}Anexar</button></div></div>`:''}
-${list.length?`<ul class="fe-attach-list">${list.map(x=>`<li${missing.has(x.id)?' class="missing"':''}>${icon('file')}<span class="fe-attach-name" title="${E(x.summary||x.name)}">${E(x.name)}</span><small>${kb(x.size)}${x.masked?` · ${x.masked} segredo${x.masked===1?'':'s'} mascarado${x.masked===1?'':'s'}`:''}${missing.has(x.id)?' · indisponível neste computador, envie de novo':''}</small>${on?`<button type="button" class="btn ghost sm square" data-action="fe-attach-remove" data-id="${E(x.id)}" aria-label="Remover ${E(x.name)}" title="Remover anexo">${icon('trash')}</button>`:''}</li>`).join('')}</ul>`:on&&!p?'<p class="hint">Arquivos de texto até 512 KB (collection, contrato OpenAPI, exemplos de payload). Os agentes leem o arquivo inteiro; ele nunca vai para o repositório.</p>':''}`;
+${p&&p.kind!=='media'?`<div class="fe-attach-pending" role="group" aria-label="Segredos encontrados"><p><b>${E(p.name)}</b>: encontrei possíveis segredos (${E(p.found.join(', '))}).</p><label><input type="checkbox" id="feAttachMask" checked> Mascarar antes de anexar (${E(ATTACH_MASK)})</label><div class="fe-attach-actions"><button type="button" class="btn ghost sm" data-action="fe-attach-cancel">Cancelar</button><button type="button" class="btn primary sm" data-action="fe-attach-confirm">${icon('check')}Anexar</button></div></div>`:''}${media}
+${list.length?`<ul class="fe-attach-list">${list.map(item).join('')}</ul>`:on&&!p?'<p class="hint">Texto até 512 KB (collection, contrato OpenAPI, exemplos de payload), imagens (PNG, JPEG, GIF, WebP) até 1,5 MB e PDF até 5 MB. Cole um print com Ctrl+V ou arraste os arquivos para cá. Os agentes leem o arquivo inteiro; ele nunca vai para o repositório.</p>':''}`;
 }
 function feAttachRefresh(){const el=$('#feAttach'),f=ui.opsFeatureDraft?.feature;if(el&&f)el.innerHTML=feAttachHTML(f);}
 // Which attachments of the open feature this database no longer has (a backup imported on another computer, a restored version).
@@ -11943,36 +11970,97 @@ function attachSummary(name,text){
 }
 async function feAttachFiles(files){
  const f=ui.opsFeatureDraft?.feature;if(!f||!liveBridge())return;
- for(const file of files){
+ files=[...files];
+ for(const[i,file]of files.entries()){
   if((f.attachments||[]).length>=ATTACH_LIMIT&&!f.attachments.some(x=>x.name===file.name)){toast(`Até ${ATTACH_LIMIT} anexos por feature.`,'error');break;}
+  const type=attachFileKind(file);
+  if(type!=='text'){
+   const m=await attachMediaPrep(file,type).catch(e=>{toast(`${file.name}: ${e.message}`,'error');return null;});
+   if(!m)continue;
+   ui.attachPending={kind:'media',...m,rest:files.slice(i+1)};feAttachRefresh();$('#feAttachNote')?.focus();return;
+  }
   if(file.size>ATTACH_MAX){toast(`${file.name} passa de 512 KB.`,'error');continue;}
-  const buf=new Uint8Array(await file.arrayBuffer());if(buf.subarray(0,8192).includes(0)){toast(`${file.name} não é um arquivo de texto.`,'error');continue;}
+  const buf=new Uint8Array(await file.arrayBuffer());if(buf.subarray(0,8192).includes(0)){toast(`${file.name} não é texto, imagem nem PDF.`,'error');continue;}
   const text=new TextDecoder('utf-8').decode(buf),sec=attachSecrets(text);
-  if(sec.count){ui.attachPending={name:file.name,text,found:sec.found,masked:sec.text,count:sec.count,rest:[...files].slice([...files].indexOf(file)+1)};feAttachRefresh();return;}
+  if(sec.count){ui.attachPending={name:file.name,text,found:sec.found,masked:sec.text,count:sec.count,rest:files.slice(i+1)};feAttachRefresh();return;}
   await feAttachUpload(file.name,text,0);
  }
 }
+// Images by type or extension (any image the browser opens is turned into PNG/JPEG), PDFs, everything else as text.
+function attachFileKind(file){
+ const t=(file.type||'').toLowerCase(),ext=(file.name.match(/\.[^.]+$/)||[''])[0].toLowerCase();
+ if(t==='application/pdf'||ext==='.pdf')return'pdf';
+ if((t.startsWith('image/')&&t!=='image/svg+xml')||['.png','.jpg','.jpeg','.gif','.webp','.bmp'].includes(ext))return'image';
+ return'text';
+}
+/* An image is reduced to ATTACH_IMG_SIDE on its longest side (the model scales it down anyway) and kept in its format when it fits;
+ * otherwise PNG, then JPEG at falling qualities until it fits ATTACH_IMG_MAX. A PDF is checked and its pages counted. */
+async function attachMediaPrep(file,type){
+ if(type==='pdf'){
+  if(file.size>ATTACH_PDF_MAX)throw Error('o PDF passa de 5 MB.');
+  const buf=new Uint8Array(await file.arrayBuffer());
+  if(new TextDecoder('latin1').decode(buf.subarray(0,5))!=='%PDF-')throw Error('não é um PDF válido.');
+  return{type,name:file.name,mime:'application/pdf',blob:file,size:file.size,pages:attachPdfPages(buf),preview:''};
+ }
+ let bmp;try{bmp=await createImageBitmap(file);}catch{throw Error('o navegador não conseguiu abrir esta imagem.');}
+ const ow=bmp.width,oh=bmp.height,k=Math.min(1,ATTACH_IMG_SIDE/Math.max(ow,oh)),w=Math.max(1,Math.round(ow*k)),h=Math.max(1,Math.round(oh*k));
+ let blob=file,mime=file.type;
+ if(k<1||file.size>ATTACH_IMG_MAX||!ATTACH_IMG_TYPES.includes(file.type)){
+  const c=document.createElement('canvas'),g=c.getContext('2d'),enc=(t,q)=>new Promise(ok=>c.toBlob(ok,t,q));c.width=w;c.height=h;
+  g.drawImage(bmp,0,0,w,h);blob=await enc('image/png');mime='image/png';
+  for(const q of[.88,.78,.65])if(!blob||blob.size>ATTACH_IMG_MAX){g.fillStyle='#fff';g.fillRect(0,0,w,h);g.drawImage(bmp,0,0,w,h);blob=await enc('image/jpeg',q);mime='image/jpeg';}
+ }
+ bmp.close?.();
+ if(!blob||blob.size>ATTACH_IMG_MAX)throw Error('a imagem passa de 1,5 MB mesmo reduzida.');
+ const name=blob===file?file.name:file.name.replace(/\.[^.]*$/,'')+(mime==='image/jpeg'?'.jpg':'.png');
+ return{type:'image',name,mime,blob,size:blob.size,dims:`${w}×${h}`,resized:k<1?`${ow}×${oh}`:'',preview:URL.createObjectURL(blob)};
+}
+function attachPdfPages(buf){return(new TextDecoder('latin1').decode(buf).match(/\/Type\s*\/Page(?![A-Za-z])/g)||[]).length;}
+function blobBase64(b){return new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(String(r.result).split(',')[1]||'');r.onerror=()=>no(r.error);r.readAsDataURL(b);});}
 async function feAttachUpload(name,text,masked){
  const f=ui.opsFeatureDraft?.feature,p=project();if(!f)return;
  try{
   const r=await bridgeFetch('/api/attachments',{method:'POST',body:JSON.stringify({projectId:p.id,featureId:f.id,name,text})}),a=r.attachment;
-  const meta={id:a.id,name:a.name,size:a.size,sha:a.sha,at:a.at,summary:attachSummary(a.name,text),masked};
+  const meta={id:a.id,name:a.name,size:a.size,sha:a.sha,at:a.at,summary:attachSummary(a.name,text),masked,mime:'text/plain',note:''};
   feAttachSet(f,[...(f.attachments||[]).filter(x=>x.id!==r.replaced&&x.name!==a.name),meta]);toast(`${a.name} anexado${masked?` com ${masked} segredo${masked===1?'':'s'} mascarado${masked===1?'':'s'}`:''}.`);
  }catch(e){toast(`Anexo não enviado: ${e.message}`,'error');}
 }
+async function feAttachUploadMedia(m,note){
+ const f=ui.opsFeatureDraft?.feature,p=project();if(!f)return;
+ try{
+  const data=await blobBase64(m.blob);
+  const r=await bridgeFetch('/api/attachments',{method:'POST',body:JSON.stringify({projectId:p.id,featureId:f.id,name:m.name,mime:m.mime,data,note})}),a=r.attachment;
+  const summary=m.type==='pdf'?`PDF${m.pages?`, ${m.pages} página${m.pages===1?'':'s'}`:''}`:`Imagem ${m.dims}`;
+  const meta={id:a.id,name:a.name,size:a.size,sha:a.sha,at:a.at,summary,masked:0,mime:a.mime,note:a.note};
+  feAttachSet(f,[...(f.attachments||[]).filter(x=>x.id!==r.replaced&&x.name!==a.name),meta]);toast(`${a.name} anexad${m.type==='pdf'?'o':'a'}.`);
+ }catch(e){toast(`Anexo não enviado: ${e.message}`,'error');}
+}
 // The draft and, for a feature already saved, the project copy change together: attachments do not wait for "Salvar feature".
-function feAttachSet(f,list){f.attachments=list;const saved=featureById(f.id);if(saved&&saved!==f){saved.attachments=list.map(x=>({...x}));save();}feAttachRefresh();}
+function feAttachSet(f,list,quiet){f.attachments=list;const saved=featureById(f.id);if(saved&&saved!==f){saved.attachments=list.map(x=>({...x}));save();}if(!quiet)feAttachRefresh();}
 async function feAttachConfirm(){
- const p=ui.attachPending;if(!p)return;const mask=$('#feAttachMask')?.checked!==false;ui.attachPending=null;feAttachRefresh();
- await feAttachUpload(p.name,mask?p.masked:p.text,mask?p.count:0);if(p.rest.length)feAttachFiles(p.rest);
+ const p=ui.attachPending;if(!p)return;
+ if(p.kind==='media'){const note=$('#feAttachNote')?.value||'';ui.attachPending=null;if(p.preview)URL.revokeObjectURL(p.preview);feAttachRefresh();await feAttachUploadMedia(p,note);}
+ else{const mask=$('#feAttachMask')?.checked!==false;ui.attachPending=null;feAttachRefresh();await feAttachUpload(p.name,mask?p.masked:p.text,mask?p.count:0);}
+ if(p.rest.length)feAttachFiles(p.rest);
+}
+function feAttachCancel(){const p=ui.attachPending;ui.attachPending=null;if(p?.preview)URL.revokeObjectURL(p.preview);feAttachRefresh();if(p?.rest.length)feAttachFiles(p.rest);}
+// A description edited in the list: saved on change, without redrawing the list (the focus may already be on the next field).
+async function feAttachNote(attId,value){
+ const f=ui.opsFeatureDraft?.feature;if(!f||!liveBridge())return;
+ try{const r=await bridgeFetch(`/api/attachments/${encodeURIComponent(attId)}`,{method:'PATCH',body:JSON.stringify({note:value})});feAttachSet(f,(f.attachments||[]).map(x=>x.id===attId?{...x,note:r.note}:x),true);}
+ catch(e){toast(`Descrição não salva: ${e.message}`,'error');}
 }
 async function feAttachRemove(attId){
  const f=ui.opsFeatureDraft?.feature;if(!f)return;
  try{await bridgeFetch(`/api/attachments/${encodeURIComponent(attId)}`,{method:'DELETE'});}catch(e){if(e.status!==404)return toast(`Anexo não removido: ${e.message}`,'error');}
  feAttachSet(f,(f.attachments||[]).filter(x=>x.id!==attId));
 }
-// Plans and chats: what each attachment holds, the files themselves only reach the steps.
-function attachPromptBlock(f,max=1500){const list=f?.attachments||[];return list.length?`Anexos (o agente da etapa lê os arquivos inteiros em .squad-code/anexos/; não os liste em "files"):\n${list.map(x=>`- ${x.name}\n  ${String(x.summary||'').slice(0,max).replace(/\n/g,'\n  ')}`).join('\n')}`:'';}
+// Plans and chats: what each attachment holds, the files themselves only reach the steps. Images and PDFs are only their description.
+function attachPromptBlock(f,max=1500){
+ const list=f?.attachments||[];if(!list.length)return'';
+ const media=list.some(x=>attachKind(x)!=='text'),pad=t=>String(t||'').slice(0,max).replace(/\n/g,'\n  ');
+ return`Anexos (o agente da etapa lê os arquivos inteiros em .squad-code/anexos/${media?', inclusive imagens e PDFs':''}; não os liste em "files"):\n${list.map(x=>{const k=attachKind(x),note=x.note?`Descrição da pessoa: ${x.note}`:'';return k==='text'?`- ${x.name}${note?`\n  ${note}`:''}\n  ${pad(x.summary)}`:`- ${x.name} (${pad(x.summary)}; você não vê o conteúdo)\n  ${note||'Sem descrição: o agente da etapa abre o arquivo e descobre o que ele mostra.'}`;}).join('\n')}`;
+}
 function autoGrow(el){if(!el)return;el.style.height='auto';el.style.height=Math.max(el.classList.contains('fe-area')?84:0,el.scrollHeight+2)+'px';}
 function flashField(el){el.classList.remove('fe-updated');void el.offsetWidth;el.classList.add('fe-updated');setTimeout(()=>el.classList.remove('fe-updated'),1800);}
 // Markdown blocks (Escopo, Critérios, Tarefas): rendered like the DIRETRIZES preview, click to edit the source, collapsible.
@@ -14326,7 +14414,7 @@ document.addEventListener('click',event=>{
   
   case 'prompt-reset':if(ui.draft?.kind==='agent')$('#agentPrompt').value=ROLES[$('#agentRole').value].prompt;break;
   case 'projects':openProjects();break;case 'squad-select':selectSquad(agentId);break;case 'squad-open':openSquadStudio(agentId);break;case 'squad-new':newSquad();break;case 'squad-cancel-new':ui.squadDraft=null;ui.squadPick=null;ui.opPending=null;render();break;case 'squad-discard':ui.squadDraft=null;ui.squadPick=null;render();break;case 'squad-delete':deleteSquad(agentId);break;case 'project-export':exportProject(agentId);break;case 'export-zip':exportLinkedZip(agentId);break;case 'export-branch':exportLinkedBranch(agentId);break;case 'export-push':exportPush();break;case 'fe-send':if(chatNow()?.kind==='agent')sendAgentChat();else sendFeatureChat();break;case 'fe-quick':sendFeatureChat(control.dataset.text);break;case 'fe-stop':{const k=chatNow()?.kind;if(k==='agent')agentChatStop();else if(k==='doc')docChatStop();else featureChatStop();break;}case 'agent-teams':event.preventDefault();openAgentTeams();break;case 'teams-mention':teamsMentionInsert(control.dataset.name);break;case 'teams-mention-pick':teamsMentionPick(control.dataset.name);break;case 'teams-tab':teamsTab(control.dataset.tab);break;case 'teams-agenda':teamsAgendaOpen(control.dataset.field);break;case 'teams-unshare':if(ui.docChat){ui.docChat.sharing=null;teamsSync();}break;case 'teams-leave':teamsLeave();break;case 'teams-leave-now':closeModal();break;case 'teams-stay':{const b=$('#atConfirm');if(b)b.hidden=true;$('#feChatInput')?.focus();break;}case 'teams-save-leave':$('#docForm')?.requestSubmit();break;case 'fe-undo':undoCoWrite(control.dataset.mid);break;case 'fe-jump':feScroll($('#feMsgs'),true);break;case 'fe-retry':retryCoWrite(control.dataset.mid);break;case 'ac-opt':agentChatChoose(control.dataset.mid,control.dataset.opt,control.dataset.arg||'');break;case 'fe-field':{if(ui.modal==='teams')teamsTab('docs');const el=document.getElementById(FE_FIELD_ID[control.dataset.field]),t=el?.closest('.fe-md')||el;if(t){t.classList.remove('collapsed');t.scrollIntoView({block:'nearest',behavior:'smooth'});t.classList.remove('fe-updated');void t.offsetWidth;t.classList.add('fe-updated');setTimeout(()=>t.classList.remove('fe-updated'),1400);}break;}case 'fe-collapse':{const sec=control.closest('.fe-md'),closed=sec.classList.toggle('collapsed');control.setAttribute('aria-expanded',String(!closed));break;}case 'fe-md-mode':feMdMode(control.closest('.fe-md'),control.dataset.mode);break;case 'fe-md-open':feMdMode(control.closest('.fe-md'),'edit');break;case 'fe-md-tool':feMdTool(control.closest('.fe-md')?.querySelector('.fe-area'),control.dataset.tool);break;case 'adr-add':{const list=control.closest('form')?.querySelector('.adr-list')||$('#adrList');if(list){list.insertAdjacentHTML('beforeend',adrBlockHTML({id:id('adr'),title:'',status:'Proposto',content:ADR_SKELETON},list.children.length));renumberAdrs(list);list.lastElementChild.querySelector('[name=adrTitle]').focus();}teamsSync();break;}case 'adr-remove':{const list=control.closest('.adr-list');control.closest('.adr-block')?.remove();renumberAdrs(list);teamsSync();break;}case 'sq-pick':openPick(control.dataset.slot,control.dataset.index);break;case 'sq-move':moveCursor(Number(control.dataset.dir)||1);break;case 'sq-cursor':clickPickItem(Number(control.dataset.i)||0);break;case 'sq-confirm':confirmPick();break;case 'sq-remove':removeOperator();break;case 'sq-more':pickMore();break;case 'sq-back':pickBack();break;case 'sq-node-view':state.settings.squadNodes=control.dataset.view==='photo'?'photo':'icon';save();render();break;case 'sq-close':ui.squadPick=null;render();break;case 'ops-feature-close':ui.opsFeature=null;ui.opsFeatureDraft=null;render();break;case 'ops-feat-view':ui.opsFeatView=control.dataset.view==='board'?'board':'list';render();break;case 'ops-plan-discard':ui.opsPlan=null;render();break;case 'ops-select':ui.opsFeature=null;ui.opsFeatureDraft=null;ui.opsPlan=null;switchProject(agentId,true);break;case 'ops-cancel-new':ui.opsNew=null;render();break;case 'ops-open-squad':goView('network');MapNetwork.home();break;case 'project-new':openProjectEditor();break;case 'op-new-existing':opNewPickStep();break;case 'op-new-squad':opNewNewSquad();break;case 'op-new-back':openOpNew(ui.opNew?.name,true);break;case 'op-new-back-code':opNewCodeStep();break;case 'op-new-repo-add':opNewRepoMode(true);break;case 'op-new-repo-cancel':opNewRepoMode(false);break;case 'op-new-repo-save':opNewRegister();break;case 'op-new-back-squad':opNewSquadStep();break;case 'project-edit':openProjectEditor(agentId);break;case 'project-switch':switchProject(agentId);break;case 'project-delete':deleteProject(agentId);break;case 'briefing':openBriefing();break;case 'map-check':mapCheck(project(),true);break;case 'base-switch':baseSwitch();break;case 'map-update':createMapUpdate();break;case 'recon-start':startRecon();break;case 'recon-team':useTeamMap();break;case 'env-refresh':toast('Verificando as ferramentas desta máquina...');loadToolchains(true).then(d=>{if(d&&!d.error)toast('Ambiente verificado.');});break;case 'project-publish':publishProject();break;case 'settings-repos':openSettings('repos');break;case 'repo-new':repoEdit('');break;case 'repo-edit':repoEdit(agentId);break;case 'repo-delete':repoDelete(agentId);break;case 'repo-cancel':ui.repoEdit=null;renderRepoPane();break;case 'branch-push':pushBranch(agentId);break;case 'merge-mark':markMerged(agentId);break;
-  case 'features':openFeatures();break;case 'feature-new':openFeatureEditor(null,control.dataset.sprint);break;case 'feature-run':startRun({featureId:agentId});break;case 'sprint-run':startRun({sprintId:agentId});break;case 'sprint-new':openSprintEditor();break;case 'sprint-edit':openSprintEditor(agentId);break;case 'sprint-delete':deleteSprint(agentId);break;case 'sprint-toggle':{const s=sprintById(agentId);if(s){const open=control.getAttribute('aria-expanded')==='true';setSprintOpen(s.id,!open);render();}break;}case 'feature-open':openFeature(agentId);break;case 'feature-delete':deleteFeature(agentId);break;case 'fe-attach-confirm':feAttachConfirm();break;case 'fe-attach-cancel':{const p=ui.attachPending;ui.attachPending=null;feAttachRefresh();if(p?.rest.length)feAttachFiles(p.rest);break;}case 'fe-attach-remove':feAttachRemove(agentId);break;
+  case 'features':openFeatures();break;case 'feature-new':openFeatureEditor(null,control.dataset.sprint);break;case 'feature-run':startRun({featureId:agentId});break;case 'sprint-run':startRun({sprintId:agentId});break;case 'sprint-new':openSprintEditor();break;case 'sprint-edit':openSprintEditor(agentId);break;case 'sprint-delete':deleteSprint(agentId);break;case 'sprint-toggle':{const s=sprintById(agentId);if(s){const open=control.getAttribute('aria-expanded')==='true';setSprintOpen(s.id,!open);render();}break;}case 'feature-open':openFeature(agentId);break;case 'feature-delete':deleteFeature(agentId);break;case 'fe-attach-confirm':feAttachConfirm();break;case 'fe-attach-cancel':feAttachCancel();break;case 'fe-attach-remove':feAttachRemove(agentId);break;
   case 'feature-approve':approveFeature(agentId,true);break;case 'feature-rework':approveFeature(agentId,false);break;
   case 'distribute':openDistribution();break;case 'plan-apply':applyPlan(control.dataset.run==='1');break;
   case 'run':startRun();break;case 'stop':stopRun();break;case 'room':openOpsChat();break;case 'ops-chat-min':opsChatMin(true);break;case 'ops-chat-restore':opsChatMin(false);break;case 'ops-chat-close':opsChatClose();break;case 'room-approve':roomApprove();break;case 'room-cancel':stopRun();break;case 'spawn':openSpawn(agentId);break;
@@ -14387,7 +14475,21 @@ document.addEventListener('dblclick',event=>{if(event.target.closest?.('#atSplit
 document.addEventListener('keydown',event=>{if(event.target.id==='atSplit')teamsSplitKey(event);else if(event.target.id==='ocSplit')opsChatSplitKey(event);});
 document.addEventListener('change',event=>{if(event.target.name==='dependencies'&&event.target.closest('#featureForm.fe-form')){const keys=[...document.querySelectorAll('#featureForm [name=dependencies]:checked')].map(x=>featureById(x.value)?.key).filter(Boolean),el=$('#feDepSummary');if(el)el.textContent=keys.join(', ')||'nenhuma';}});
 document.addEventListener('change',event=>{if(event.target.name==='squadId'&&event.target.closest('#projectForm'))refreshDocAgents();});
-document.addEventListener('change',event=>{if(event.target.id!=='feAttachInput')return;const files=[...event.target.files];event.target.value='';if(files.length)feAttachFiles(files);});
+document.addEventListener('change',event=>{if(event.target.classList?.contains('fe-attach-note'))return feAttachNote(event.target.dataset.id,event.target.value);if(event.target.id!=='feAttachInput')return;const files=[...event.target.files];event.target.value='';if(files.length)feAttachFiles(files);});
+// Enter in an attachment description never submits the feature form: it confirms the pending file or saves the description.
+document.addEventListener('keydown',event=>{if(event.key!=='Enter'||event.isComposing)return;const t=event.target;if(t.id==='feAttachNote'){event.preventDefault();feAttachConfirm();}else if(t.classList?.contains('fe-attach-note')){event.preventDefault();t.blur();}});
+// A screenshot pasted (Ctrl+V) anywhere in the feature editor becomes an attachment; text pastes go on as usual.
+document.addEventListener('paste',event=>{
+ if(!$('#feAttach')||!liveBridge()||ui.attachPending)return;
+ const files=[...(event.clipboardData?.files||[])].filter(x=>/^image\//.test(x.type));if(!files.length)return;
+ event.preventDefault();const stamp=new Date().toISOString().replace(/\D/g,'').slice(0,14);
+ feAttachFiles(files.map((x,i)=>new File([x],`print-${stamp}${files.length>1?`-${i+1}`:''}.${(x.type.split('/')[1]||'png').replace('jpeg','jpg')}`,{type:x.type})));
+});
+// Files dropped on the ANEXOS section (the feature rows' own drag uses dragFeatureId).
+const attachDropBox=event=>!dragFeatureId&&[...(event.dataTransfer?.types||[])].includes('Files')&&liveBridge()?event.target.closest?.('#feAttach'):null;
+document.addEventListener('dragover',event=>{const box=attachDropBox(event);if(!box)return;event.preventDefault();event.dataTransfer.dropEffect='copy';box.classList.add('drop');});
+document.addEventListener('dragleave',event=>{const box=event.target.closest?.('#feAttach');if(box&&!box.contains(event.relatedTarget))box.classList.remove('drop');});
+document.addEventListener('drop',event=>{const box=attachDropBox(event);if(!box)return;event.preventDefault();box.classList.remove('drop');const files=[...event.dataTransfer.files];if(files.length&&!ui.attachPending)feAttachFiles(files);});
 // Wizard and briefing: the repository decides the reconnaissance default (team map); a picked option is kept in ui.opNew.
 document.addEventListener('change',event=>{const t=event.target;
  if(t.id==='opNewRepo'){if(ui.opNew)delete ui.opNew.reconMode;opNewReconRefresh();}

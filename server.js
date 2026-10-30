@@ -68,6 +68,7 @@ const TOOL_RE = /^[A-Za-z][A-Za-z0-9_]*(\([^()\r\n"]{0,200}\))?$|^mcp__[A-Za-z0-
 const MODEL_RE = /^[A-Za-z0-9._\-\[\]]{1,80}$/;
 const MAX_EVENTS = 5000;
 const MAX_BODY = 2 * 1024 * 1024;
+const ATTACH_BODY = 8 * 1024 * 1024; // a 5 MB PDF in base64 inside the JSON
 
 const runs = new Map();
 let maxConcurrent = 2;
@@ -703,6 +704,7 @@ function killTree(child) {
 function activeCount() { return [...runs.values()].filter(r => r.status === 'running').length; }
 
 function pushEvent(run, event) {
+  event = leanEvent(event);
   run.events.push(event);
   if (run.events.length > MAX_EVENTS) run.events.splice(0, run.events.length - MAX_EVENTS);
   const line = `data: ${JSON.stringify(event)}\n\n`;
@@ -726,6 +728,32 @@ function flushRun(run) {
   if (!batch.length || !run.persist || !store) return;
   try { store.appendRunEvents(run.id, batch); }
   catch (e) { run.persist = false; console.warn(`Histórico da execução ${run.id} não gravado: ${e.message}`); }
+}
+/* An image or PDF an agent reads (Read tool) comes back in the tool_result as base64, with another copy in `tool_use_result`.
+   The model already has it and the page shows only text, so memory, the page (SSE) and the history get a short note instead. */
+function leanEvent(event) {
+  if (event?.type !== 'user' || !Array.isArray(event.message?.content)) return event;
+  let hit = false;
+  const kb = s => `${Math.max(1, Math.round(s.length * 0.75 / 1024))} KB`;
+  const media = x => x?.source?.type === 'base64' && typeof x.source.data === 'string';
+  const note = x => { hit = true; return { type: 'text', text: `[${x.type === 'image' ? 'imagem lida' : x.type === 'document' ? 'documento lido' : 'arquivo lido'} pelo agente (${x.source.media_type || 'binário'}, ${kb(x.source.data)}), fora do histórico]` }; };
+  const block = b => media(b) ? note(b) : b?.type === 'tool_result' && Array.isArray(b.content) && b.content.some(media) ? { ...b, content: b.content.map(x => media(x) ? note(x) : x) } : b;
+  const strip = (v, d) => {
+    if (!v || typeof v !== 'object' || d > 6) return v;
+    if (Array.isArray(v)) return v.map(x => strip(x, d + 1));
+    const o = {};
+    for (const [k, x] of Object.entries(v)) {
+      if (typeof x === 'string' && x.length > 256 && (k === 'base64' || (k === 'data' && v.type === 'base64'))) { o[k] = `[omitido: ${kb(x)}]`; hit = true; }
+      else o[k] = strip(x, d + 1);
+    }
+    return o;
+  };
+  const content = event.message.content.map(block);
+  const extra = strip(event.tool_use_result, 0);
+  if (!hit) return event;
+  const out = { ...event, message: { ...event.message, content } };
+  if (extra !== undefined) out.tool_use_result = extra;
+  return out;
 }
 function storedEvent(event) {
   if (event.type !== 'user' || !Array.isArray(event.message?.content)) return event;
@@ -924,17 +952,20 @@ async function placeAttachments(run, opts) {
     let name = f.name, n = 1;
     while (used.has(name.toLowerCase())) { const m = f.name.match(/^(.*?)(\.[^.]*)?$/); name = `${m[1]}-${++n}${m[2] || ''}`; }
     used.add(name.toLowerCase());
-    fs.writeFileSync(path.join(dir, name), f.text, 'utf8');
-    placed.push({ name, path: `${ATTACH_DIR}/anexos/${name}`, size: f.size });
+    if (f.data) fs.writeFileSync(path.join(dir, name), f.data); else fs.writeFileSync(path.join(dir, name), f.text, 'utf8');
+    placed.push({ name, path: `${ATTACH_DIR}/anexos/${name}`, size: f.size, mime: f.mime, note: f.note || '' });
   }
   const missing = opts.attachments.length - files.length;
   pushEvent(run, { type: 'bridge', subtype: 'attachments', files: placed, missing });
   run.promptExtra = (run.promptExtra || '') + attachNote(placed, missing);
 }
 function attachNote(placed, missing) {
-  return `\n\n## Anexos da feature\nA pessoa anexou ${placed.length === 1 ? 'este arquivo' : 'estes arquivos'} à feature. Leia antes de começar e use como fonte (contratos, exemplos, endpoints):\n` +
-    placed.map(f => `- ${f.path} (${f.size < 1024 ? `${f.size} bytes` : `${Math.round(f.size / 1024)} KB`})`).join('\n') +
+  const kind = m => m === 'application/pdf' ? 'PDF, ' : /^image\//.test(m || '') ? 'imagem, ' : '';
+  const media = placed.some(f => kind(f.mime));
+  return `\n\n## Anexos da feature\nA pessoa anexou ${placed.length === 1 ? 'este arquivo' : 'estes arquivos'} à feature. Leia antes de começar e use como fonte (contratos, exemplos, endpoints, telas):\n` +
+    placed.map(f => `- ${f.path} (${kind(f.mime)}${f.size < 1024 ? `${f.size} bytes` : `${Math.round(f.size / 1024)} KB`})${f.note ? `: ${f.note}` : ''}`).join('\n') +
     `\nSão referência: não copie, não mova e não versione esses arquivos (ficam fora do git). Valores como {{TOKEN}} ou ***MASCARADO*** são segredos removidos: use configuração (variáveis de ambiente, user-secrets, appsettings sem valor real), nunca um valor inventado.` +
+    (media ? `\nImagens e PDFs: abra com a ferramenta Read, que mostra a imagem e as páginas do PDF (num PDF longo, leia por partes com o parâmetro pages). Não transcreva para o código tokens, senhas ou dados pessoais que apareçam neles.` : '') +
     (missing ? `\n${missing} anexo(s) não estavam mais disponíveis neste computador.` : '') + '\n';
 }
 
@@ -1419,12 +1450,21 @@ async function handle(req, res) {
       if (req.method === 'PUT' || req.method === 'POST') return json(res, 200, needStore().saveChat(parts[2], key, await readBody(req, MAX_WORKSPACE)));
       if (req.method === 'DELETE') return json(res, 200, needStore().deleteChat(parts[2], key));
     }
-    // Feature attachments: POST {projectId, featureId, name, text} → metadata; GET ?ids=a,b → the ones this database has;
-    // GET /:id with the text; DELETE /:id.
-    if (parts[1] === 'attachments' && !parts[2] && req.method === 'POST') return json(res, 200, needStore().saveAttachment(await readBody(req)));
+    // Feature attachments: POST {projectId, featureId, name, text | data (base64) + mime, note} → metadata; GET ?ids=a,b → the
+    // ones this database has; GET /:id with the text (or data in base64), ?raw=1 the file itself (thumbnails; ?token= works);
+    // PATCH /:id {note}; DELETE /:id.
+    if (parts[1] === 'attachments' && !parts[2] && req.method === 'POST') return json(res, 200, needStore().saveAttachment(await readBody(req, ATTACH_BODY)));
     if (parts[1] === 'attachments' && !parts[2] && req.method === 'GET') return json(res, 200, { ok: true, ids: needStore().getAttachments(String(url.searchParams.get('ids') || '').split(',').slice(0, 50)).map(a => a.id) });
     if (parts[1] === 'attachments' && parts[2] && !parts[3]) {
-      if (req.method === 'GET') { const [a] = needStore().getAttachments([parts[2]]); return a ? json(res, 200, { ok: true, attachment: a }) : fail(res, 404, 'Anexo não encontrado.'); }
+      if (req.method === 'GET') {
+        const [a] = needStore().getAttachments([parts[2]]);
+        if (!a) return fail(res, 404, 'Anexo não encontrado.');
+        if (url.searchParams.get('raw') !== '1') return json(res, 200, { ok: true, attachment: a.data ? { ...a, data: a.data.toString('base64') } : a });
+        const body = a.data || Buffer.from(a.text, 'utf8');
+        res.writeHead(200, { 'Content-Type': a.data ? a.mime : 'text/plain; charset=utf-8', 'Content-Length': body.length, 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': 'sandbox', 'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(a.name)}` });
+        return res.end(body);
+      }
+      if (req.method === 'PATCH') return json(res, 200, needStore().noteAttachment(parts[2], (await readBody(req)).note));
       if (req.method === 'DELETE') return json(res, 200, needStore().deleteAttachment(parts[2]));
     }
     if (url.pathname === '/api/claude/settings') {

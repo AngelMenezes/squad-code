@@ -1003,7 +1003,27 @@ body:has(#modalRoot .overlay) #sqPopRoot{visibility:hidden}
 .fe-attach-add{cursor:pointer;letter-spacing:0}
 .fe-attach .hint{margin-top:8px}
 .fe-attach-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
-.fe-attach-list li{display:flex;align-items:center;gap:9px;border:1px solid #ffffff1a;padding:5px 6px 5px 10px;font-size:11.5px;min-width:0}
+.fe-attach-list li{display:flex;align-items:flex-start;gap:9px;border:1px solid #ffffff1a;padding:5px 6px 5px 10px;font-size:11.5px;min-width:0}
+.fe-attach{transition:background .14s,outline-color .14s;outline:1px dashed transparent;outline-offset:4px}
+.fe-attach.drop{outline-color:var(--cyan);background:#30c5e80d}
+.fe-attach-list li>.icon{margin-top:5px}
+.fe-attach-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.fe-attach-row{display:flex;align-items:center;gap:9px;min-width:0}
+.fe-attach-note{width:100%;background:transparent;border:1px solid #ffffff12;color:var(--ink);font-size:11px;padding:3px 7px}
+.fe-attach-note::placeholder{color:var(--dim)}
+.fe-attach-desc{font-size:11px;color:var(--muted)}
+.fe-attach-thumb{flex:none;width:56px;height:40px;display:block;border:1px solid #ffffff1a;background:#0d1113;overflow:hidden}
+.fe-attach-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.fe-attach-pending.media{border-color:#30c5e855;background:#0b1518}
+.fe-attach-preview{display:flex;align-items:center;gap:12px;min-width:0}
+.fe-attach-preview img{width:120px;max-height:90px;object-fit:contain;border:1px solid #ffffff1a;background:#0d1113;flex:none}
+.fe-attach-preview>.icon{width:28px;height:28px;color:var(--cyan)}
+.fe-attach-preview small{display:block;color:var(--muted)}
+.fe-attach-preview b{word-break:break-all}
+.fe-attach-notefield{display:flex!important;flex-direction:column;align-items:stretch!important;gap:4px!important;font:600 9px var(--mono);letter-spacing:1.5px;color:var(--muted);cursor:default!important}
+.fe-attach-notefield input{background:#080a0b;border:1px solid #ffffff26;color:var(--ink);font:12px var(--sans);letter-spacing:0;padding:6px 8px}
+.fe-attach-warn{display:flex;gap:7px;align-items:flex-start;color:#e8c070}
+.fe-attach-warn .icon{width:14px;height:14px;flex:none;margin-top:2px}
 .fe-attach-list li>.icon{width:14px;height:14px;flex:none;color:var(--cyan)}
 .fe-attach-name{font:600 11px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .fe-attach-list small{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

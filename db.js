@@ -31,8 +31,19 @@ const REF_RE = /^[A-Za-z0-9_-]{1,100}$/;
 const CHAT_KEY_RE = { feature: REF_RE, agent: REF_RE, doc: /^[A-Za-z0-9_:+-]{1,800}$/ };
 const ROOM_KINDS = new Set(['system', 'say', 'call', 'baton', 'plan', 'review']);
 const RUN_KINDS = new Set(['step', 'plan', 'chat', 'cowrite', 'doc', 'spawn']);
-// Feature attachments (a collection, a contract): text files up to ATTACH_MAX bytes, ATTACH_PER_FEATURE per feature.
+// Feature attachments (a collection, a contract, a screenshot, a spec in PDF): text files up to ATTACH_MAX bytes, images and PDFs
+// of ATTACH_MEDIA (checked by their first bytes, the extension follows the type so the agent's Read tool opens them),
+// ATTACH_PER_FEATURE per feature.
 const ATTACH_MAX = 512 * 1024;
+const ATTACH_IMAGE_MAX = 1.5 * 1024 * 1024, ATTACH_PDF_MAX = 5 * 1024 * 1024;
+const starts = (b, s, at = 0) => b.length >= at + s.length && b.subarray(at, at + s.length).equals(Buffer.from(s, 'latin1'));
+const ATTACH_MEDIA = {
+  'image/png': { ext: ['.png'], max: ATTACH_IMAGE_MAX, magic: b => starts(b, '\x89PNG\r\n\x1a\n') },
+  'image/jpeg': { ext: ['.jpg', '.jpeg'], max: ATTACH_IMAGE_MAX, magic: b => starts(b, '\xff\xd8\xff') },
+  'image/gif': { ext: ['.gif'], max: ATTACH_IMAGE_MAX, magic: b => starts(b, 'GIF87a') || starts(b, 'GIF89a') },
+  'image/webp': { ext: ['.webp'], max: ATTACH_IMAGE_MAX, magic: b => starts(b, 'RIFF') && starts(b, 'WEBP', 8) },
+  'application/pdf': { ext: ['.pdf'], max: ATTACH_PDF_MAX, magic: b => starts(b, '%PDF-') },
+};
 const ATTACH_PER_FEATURE = 20;
 const ATTACH_ID_RE = /^at[0-9a-f]{16}$/;
 
@@ -142,12 +153,21 @@ const ATTACH_SCHEMA = `
 CREATE TABLE attachments (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, feature_id TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, sha TEXT NOT NULL, created_at TEXT NOT NULL, content TEXT NOT NULL);
 CREATE INDEX attachments_feature ON attachments (feature_id);
 `;
+// Version 3: images and PDFs (bytes in `data`, `content` empty) and the person's description of each file (`note`).
+const ATTACH_MEDIA_SCHEMA = `
+ALTER TABLE attachments ADD COLUMN mime TEXT NOT NULL DEFAULT 'text/plain';
+ALTER TABLE attachments ADD COLUMN data BLOB;
+ALTER TABLE attachments ADD COLUMN note TEXT NOT NULL DEFAULT '';
+`;
 /** A file name that is safe in any folder of any system: no path, no reserved characters or names, at most 120 characters. */
 function attachName(name) {
   let n = String(name || '').split(/[\\/]/).pop().replace(/[<>:"|?*\u0000-\u001f]/g, '_').replace(/^[\s.]+|[\s.]+$/g, '').slice(-120);
   if (/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(n)) n = `_${n}`;
   return n || 'anexo.txt';
 }
+
+/** The person's description of an attachment: one paragraph, at most 500 characters. */
+function attachNoteText(note) { return String(note ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500); }
 
 /** Synchronous rename that waits a little when Windows holds the file (antivirus, an editor). */
 function moveSync(from, to) {
@@ -167,6 +187,7 @@ function openStore(dataDir) {
   db.pragma('busy_timeout = 5000');
   if (db.pragma('user_version', { simple: true }) < 1) db.transaction(() => { db.exec(schema()); db.pragma('user_version = 1'); })();
   if (db.pragma('user_version', { simple: true }) < 2) db.transaction(() => { db.exec(ATTACH_SCHEMA); db.pragma('user_version = 2'); })();
+  if (db.pragma('user_version', { simple: true }) < 3) db.transaction(() => { db.exec(ATTACH_MEDIA_SCHEMA); db.pragma('user_version = 3'); })();
 
   const q = {
     metaGet: db.prepare('SELECT value FROM meta WHERE key = ?').pluck(),
@@ -187,7 +208,8 @@ function openStore(dataDir) {
     chatUpsert: db.prepare('INSERT INTO chats (kind, key, project_id, ref_id, updated_at, data) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (kind, key) DO UPDATE SET project_id = excluded.project_id, ref_id = excluded.ref_id, updated_at = excluded.updated_at, data = excluded.data'),
     chatDelete: db.prepare('DELETE FROM chats WHERE kind = ? AND key = ?'),
     chatAll: db.prepare('SELECT kind, key, data FROM chats'),
-    attachInsert: db.prepare('INSERT INTO attachments (id, project_id, feature_id, name, size, sha, created_at, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
+    attachInsert: db.prepare('INSERT INTO attachments (id, project_id, feature_id, name, size, sha, created_at, content, mime, data, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'),
+    attachNote: db.prepare('UPDATE attachments SET note = ? WHERE id = ?'),
     attachGet: db.prepare('SELECT * FROM attachments WHERE id = ?'),
     attachByName: db.prepare('SELECT id FROM attachments WHERE feature_id = ? AND name = ?').pluck(),
     attachCount: db.prepare('SELECT count(*) FROM attachments WHERE feature_id = ?').pluck(),
@@ -375,26 +397,45 @@ function openStore(dataDir) {
     return out;
   }
   /* ---------- feature attachments ---------- */
-  /** Stores a text file of a feature; a file with the same name in that feature is replaced (its id comes back as `replaced`). */
+  /** Stores a file of a feature: `text`, or `data` (base64) with an ATTACH_MEDIA `mime`; `note` is the person's description. A
+      file with the same name in that feature is replaced (its id comes back as `replaced`). */
   function saveAttachment(body) {
     const projectId = body?.projectId, featureId = body?.featureId, text = body?.text;
     if (typeof projectId !== 'string' || !REF_RE.test(projectId) || typeof featureId !== 'string' || !REF_RE.test(featureId)) throw bad('Feature inválida.');
-    if (typeof text !== 'string') throw bad('Anexo sem conteúdo.');
-    const size = Buffer.byteLength(text, 'utf8');
-    if (size > ATTACH_MAX) throw bad(`O anexo passa de ${ATTACH_MAX / 1024} KB.`, 413);
-    const name = attachName(body.name), same = q.attachByName.get(featureId, name);
+    let name = attachName(body.name), mime = 'text/plain', data = null, size;
+    if (body?.data !== undefined) {
+      const media = ATTACH_MEDIA[body.mime];
+      if (!media) throw bad('Tipo de anexo não aceito: envie texto, imagem (PNG, JPEG, GIF, WebP) ou PDF.', 415);
+      if (typeof body.data !== 'string' || !body.data || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.data)) throw bad('Anexo sem conteúdo.');
+      data = Buffer.from(body.data, 'base64'); size = data.length; mime = body.mime;
+      if (size > media.max) throw bad(`${mime === 'application/pdf' ? 'O PDF' : 'A imagem'} passa de ${String(media.max / 1024 / 1024).replace('.', ',')} MB.`, 413);
+      if (!media.magic(data)) throw bad('O conteúdo do arquivo não confere com o tipo informado.', 415);
+      if (!media.ext.includes(path.extname(name).toLowerCase())) name = attachName(`${name.replace(/\.[^.]*$/, '')}${media.ext[0]}`);
+    } else {
+      if (typeof text !== 'string') throw bad('Anexo sem conteúdo.');
+      size = Buffer.byteLength(text, 'utf8');
+      if (size > ATTACH_MAX) throw bad(`O anexo passa de ${ATTACH_MAX / 1024} KB.`, 413);
+    }
+    const same = q.attachByName.get(featureId, name);
     if (!same && q.attachCount.get(featureId) >= ATTACH_PER_FEATURE) throw bad(`Até ${ATTACH_PER_FEATURE} anexos por feature.`, 409);
-    const meta = { id: `at${crypto.randomBytes(8).toString('hex')}`, name, size, sha: hash(text), at: nowISO() };
+    const meta = { id: `at${crypto.randomBytes(8).toString('hex')}`, name, size, sha: hash(data || text), at: nowISO(), mime, note: attachNoteText(body.note) };
     db.transaction(() => {
       if (same) q.attachDelete.run(same);
-      q.attachInsert.run(meta.id, projectId, featureId, name, size, meta.sha, meta.at, text);
+      q.attachInsert.run(meta.id, projectId, featureId, name, size, meta.sha, meta.at, data ? '' : text, mime, data, meta.note);
     })();
     return { ok: true, attachment: meta, replaced: same || null };
   }
-  /** Attachments by id, with their content (the missing ones are left out). */
+  /** Attachments by id, with their content: `text`, or `data` (a Buffer) for images and PDFs. The missing ones are left out. */
   function getAttachments(ids) {
     return (Array.isArray(ids) ? ids : []).filter(id => typeof id === 'string' && ATTACH_ID_RE.test(id)).map(id => q.attachGet.get(id)).filter(Boolean)
-      .map(r => ({ id: r.id, projectId: r.project_id, featureId: r.feature_id, name: r.name, size: r.size, sha: r.sha, at: r.created_at, text: r.content }));
+      .map(r => ({ id: r.id, projectId: r.project_id, featureId: r.feature_id, name: r.name, size: r.size, sha: r.sha, at: r.created_at, mime: r.mime, note: r.note, ...(r.data ? { data: r.data } : { text: r.content }) }));
+  }
+  /** Changes the description of an attachment. */
+  function noteAttachment(id, note) {
+    if (typeof id !== 'string' || !ATTACH_ID_RE.test(id)) throw bad('Anexo inválido.');
+    const text = attachNoteText(note);
+    if (!q.attachNote.run(text, id).changes) throw bad('Anexo não encontrado.', 404);
+    return { ok: true, note: text };
   }
   function deleteAttachment(id) { if (typeof id !== 'string' || !ATTACH_ID_RE.test(id)) throw bad('Anexo inválido.'); q.attachDelete.run(id); return { ok: true }; }
 
@@ -446,7 +487,7 @@ function openStore(dataDir) {
     file, migration, interrupted, runMeta,
     syncWorkspace, readWorkspace, backupWorkspace, listSnapshots, getSnapshot,
     saveRoom, loadRooms, saveChat, deleteChat, loadChats, sweep,
-    saveAttachment, getAttachments, deleteAttachment,
+    saveAttachment, getAttachments, noteAttachment, deleteAttachment,
     insertRun, appendRunEvents, finishRun, listRuns, getRun, runEvents,
     close: () => db.close(),
   };

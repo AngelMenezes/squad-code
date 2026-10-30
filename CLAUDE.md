@@ -161,17 +161,22 @@ text, so browsers still match) and the files move to `data/legacy-json/`. A seco
 /api/rooms/:projectId` `{seq, upserts, removes}` (ids `rm<n>`, texts cut to the room's limits, 800 kept); `PUT|DELETE
 /api/chats/:kind/:key` (feature, agent, doc; 300 messages kept). Runs: `insertRun` at spawn (`body.meta` whitelisted by `runMeta`:
 projectId, agentId, featureId, kind), events batched every 200 ms (`persistEvent`; no `stream_event`, tool results cut at 4000, exit
-always kept), `finishRun` on close; at start runs left `running` become `interrupted` with a synthetic exit event; newest 300 kept.
+always kept); `pushEvent` first runs `leanEvent`: base64 images/PDFs an agent reads (tool_result blocks and `tool_use_result`) become a
+short note, so neither memory, SSE nor the history ever hold them, `finishRun` on close; at start runs left `running` become `interrupted` with a synthetic exit event; newest 300 kept.
 `GET /api/runs` (`?projectId`, `limit`) lists the history, and `/api/runs/:id[/events]` fall back to it for runs not in memory; the
 console's **Histórico** (`openConsoleHistory` → `replayRun`, client `runMeta` on the four `POST /api/runs`) replays them.
-**Feature attachments** (a collection, a contract the team sent): table `attachments` (migration `user_version` 2, outside the
-workspace sync; text only, `ATTACH_MAX` 512 KB, 20 per feature, `attachName` strips paths and reserved names, same name in a feature
-replaces). `POST /api/attachments {projectId, featureId, name, text}`, `GET ?ids=` (which ones this database has), `GET|DELETE /:id`;
-`sweep` drops those of features that no longer exist. A step sent with `attachments: [ids]` gets them written by `placeAttachments`
+**Feature attachments** (a collection, a contract the team sent, a screenshot, a spec in PDF): table `attachments` (migration
+`user_version` 2, outside the workspace sync; text up to `ATTACH_MAX` 512 KB; migration 3 adds `mime`, `data` (BLOB) and `note`:
+images PNG/JPEG/GIF/WebP up to 1,5 MB and PDF up to 5 MB (`ATTACH_MEDIA`, checked by their first bytes, the extension follows the
+type so the agent's Read tool opens them); 20 per feature, `attachName` strips paths and reserved names, same name in a feature
+replaces). `POST /api/attachments {projectId, featureId, name, text | data (base64) + mime, note}` (body up to `ATTACH_BODY` 8 MB),
+`GET ?ids=` (which ones this database has), `GET /:id` (binary as base64; `?raw=1` the file itself with `Content-Security-Policy:
+sandbox`, for thumbnails, `?token=` works), `PATCH /:id {note}` (`noteAttachment`), `DELETE /:id`; `sweep` drops those of features
+that no longer exist. A step sent with `attachments: [ids]` gets them written by `placeAttachments`
 (after the preparing phase, before claude) to `<cwd>/.squad-code/anexos/`, replacing what an earlier step left (`[]` clears it), with
 `.squad-code/` in the repository's `info/exclude` (`git rev-parse --git-common-dir`, so every worktree and a monorepo subfolder are
 covered): git status, `commitStep` and `removeWorktree` never see them. A `bridge`/`attachments` event lists them (`missing` count) and
-`attachNote` appends their paths to the prompt.
+`attachNote` appends their paths to the prompt (with the kind, the person's description, and for images/PDFs how to open them with Read).
 Squad colleagues: the `agents` option (whitelisted CLI subagent fields: `description`, `prompt`, `tools`, `model`, `effort`) is written
 to a temp file passed as `--agents <file>`, and `forwardSubagents:true` adds `--forward-subagent-text`. Runs with agents get
 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, so an `Agent` tool call runs in the foreground and its tool_result is the colleague's
@@ -411,7 +416,12 @@ that repository, then `PUT /api/repos/:id` with the new `baseBranch`, so it appl
   the branch when nothing changed (line endings ignored). `showExportResult` reports it and **Enviar branch** goes through
   `pushSquadBranch` (shared with the merge notice).
 - Feature attachments: ANEXOS in the feature editor (`feAttachHTML` in `#feAttach`, `#feAttachInput`, bridge only). `f.attachments`
-  (persisted, normalized) holds `{id, name, size, sha, at, summary, masked}`; the text lives in the bridge's table. Uploads and removals
+  (persisted, normalized) holds `{id, name, size, sha, at, summary, masked, mime, note}`; the file lives in the bridge's table. Images and
+  PDFs (`attachFileKind`; also pasted with Ctrl+V anywhere in the editor, or dropped on `#feAttach`) go through `attachMediaPrep` (images
+  reduced to `ATTACH_IMG_SIDE` 1568 px on a canvas, PNG then JPEG until ≤ 1,5 MB; PDF pages counted) and wait in place
+  (`ui.attachPending.kind === 'media'`: preview, `#feAttachNote` description, LGPD warning, no masking possible); thumbnails load from
+  `attachRaw` (`?raw=1&token=`); a description edited in the list (`.fe-attach-note`) is saved by `feAttachNote` (PATCH, no redraw); Enter
+  in those fields never submits the feature form. The plan and the chat see only an image/PDF's summary and description. Uploads and removals
   apply at once to the draft and the saved feature (`feAttachSet`), not with "Salvar feature". `attachSecrets` finds secrets (sensitive
   headers and JSON keys, Postman `{key,value}`, escaped `body.raw`, Bearer/Basic, JWT, `curl -u`; `{{placeholders}}` stay) and asks in
   place (`ui.attachPending`, never `confirmAction`) with "Mascarar" checked (`***MASCARADO***`). `attachSummary` (Postman, Insomnia,
