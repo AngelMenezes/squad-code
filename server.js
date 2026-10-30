@@ -112,15 +112,26 @@ function tokenOk(req, url) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-/** Resolve an executable name to a full path (Windows needs to know .exe vs .cmd). */
+/** Resolve an executable name to a full path (Windows needs to know .exe vs .cmd).
+ * Windows searches PATH here instead of asking `where`, whose output comes in the console code page (CP850...) and would garble
+ * non-ASCII folders (C:\Users\Angélica) when read as UTF-8. */
 function resolveBin(bin) {
   return new Promise(resolve => {
     if (path.isAbsolute(bin) || bin.includes('/') || bin.includes('\\')) return resolve(fs.existsSync(bin) ? path.resolve(bin) : null);
-    execFile(IS_WIN ? 'where' : 'which', [bin], { windowsHide: true }, (err, stdout) => {
+    if (IS_WIN) {
+      const exts = /\.(exe|cmd|bat)$/i.test(bin) ? [''] : ['.exe', '.cmd', '.bat'];
+      for (const dir of String(process.env.PATH || '').split(path.delimiter).map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean)) {
+        for (const ext of exts) {
+          const file = path.join(dir, bin + ext);
+          try { if (fs.statSync(file).isFile()) return resolve(file); } catch {}
+        }
+      }
+      return resolve(null);
+    }
+    execFile('which', [bin], { windowsHide: true }, (err, stdout) => {
       if (err) return resolve(null);
       const lines = String(stdout).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const pick = IS_WIN ? (lines.find(l => /\.(exe|cmd|bat)$/i.test(l)) || lines[0]) : lines[0];
-      resolve(pick || null);
+      resolve(lines[0] || null);
     });
   });
 }
