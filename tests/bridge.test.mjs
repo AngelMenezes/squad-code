@@ -1251,3 +1251,66 @@ test('the tools of this machine come from their version commands, are cached, an
   assert.match(withEnv, /não finja que ela existe/);
   assert.ok(!(await run({})).includes('Ferramentas instaladas'));
 });
+
+test('feature attachments: stored apart, written in the step folder out of git, listed in the prompt, cleared and swept', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const ws = { version: 2, agents: [{ id: 'a1', name: 'VANGUARD', role: 'commander' }], projects: [{ id: 'p1', name: 'Um', features: [{ id: 'f1', title: 'Pagamentos' }] }], squads: [] };
+  assert.equal((await api('/api/workspace?force=1', { method: 'PUT', body: JSON.stringify(ws) })).status, 200);
+  const att = body => api('/api/attachments', { method: 'POST', body: JSON.stringify({ projectId: 'p1', featureId: 'f1', ...body }) });
+  const col = JSON.stringify({ info: { name: 'Pagamentos' }, item: [{ name: 'Criar', request: { method: 'POST', url: { raw: '{{base}}/v1/pagamentos' } } }] });
+  // The name loses any path; a file with the same name in the feature is replaced; too big or a bad feature id is refused.
+  let r = await (await att({ name: 'C:\\fakepath\\collection.json', text: col })).json();
+  assert.equal(r.attachment.name, 'collection.json');
+  const a1 = r.attachment.id, a2 = (await (await att({ name: 'notas.md', text: '# Notas\n' })).json()).attachment.id;
+  r = await (await att({ name: 'notas.md', text: '# Notas v2\n' })).json();
+  assert.equal(r.replaced, a2);
+  const a3 = r.attachment.id;
+  assert.equal((await att({ name: 'grande.txt', text: 'x'.repeat(512 * 1024 + 1) })).status, 413);
+  assert.equal((await att({ featureId: '../f1', name: 'a.txt', text: 'a' })).status, 400);
+  assert.deepEqual((await (await api(`/api/attachments?ids=${a1},${a2},${a3}`)).json()).ids, [a1, a3]);
+  assert.equal((await (await api(`/api/attachments/${a1}`)).json()).attachment.text, col);
+  assert.equal((await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: 'op-098-anexos', attachments: ['../x'] } }) })).status, 400);
+
+  // A new project's step: the files are in the folder, listed in the prompt, out of the commit; a missing id is reported.
+  const folder = 'op-098-anexos', dir = path.join(projectsRoot, folder);
+  const go = async (options, prompt, project = folder, extra = {}) => {
+    const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt, label: 'FORGE / F01', options: { project, ...extra, ...options } }) });
+    assert.equal(res.status, 201, await res.clone().text());
+    return collect((await res.json()).runId);
+  };
+  let ev = await go({ commit: true, attachments: [a1, a3, 'at0000000000000000'] }, 'integrar WRITE:src/Api.cs');
+  const placed = ev.find(e => e.subtype === 'attachments');
+  assert.deepEqual([placed.files.map(f => f.path), placed.missing], [['.squad-code/anexos/collection.json', '.squad-code/anexos/notas.md'], 1]);
+  assert.equal(readFileSync(path.join(dir, '.squad-code', 'anexos', 'collection.json'), 'utf8'), col);
+  assert.match(ev.at(-1).result, /## Anexos da feature[\s\S]*- \.squad-code\/anexos\/collection\.json[\s\S]*não estavam mais disponíveis/);
+  assert.deepEqual(ev.find(e => e.subtype === 'commit').files, ['src/Api.cs']);
+  assert.ok(readFileSync(path.join(dir, '.git', 'info', 'exclude'), 'utf8').split(/\r?\n/).includes('.squad-code/'));
+  // The next step without attachments clears them; a chat (no attachments option) leaves the folder alone.
+  ev = await go({ commit: true, attachments: [] }, 'revisar');
+  assert.ok(!existsSync(path.join(dir, '.squad-code', 'anexos')));
+  assert.ok(!ev.at(-1).result.includes('Anexos da feature'));
+
+  // A linked operation: written in the feature's worktree, never committed, and approval still removes the worktree.
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main'); writeFileSync(path.join(src, 'README.md'), '# BFF\n'); gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'init');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'bff', path: src, baseBranch: 'main' }] }));
+  try {
+    const linked = 'op-099-bff', root = path.join(projectsRoot, linked), wt = path.join(root, '.wt', 'f01-dddddd');
+    ev = await go({ feature: 'f01-dddddd', attachments: [a1] }, 'integrar WRITE:Clients/Pagamentos.cs', linked, { repo: 'bff' });
+    assert.equal(ev.at(-1).status, 'done', JSON.stringify(ev.at(-1)));
+    assert.ok(existsSync(path.join(wt, '.squad-code', 'anexos', 'collection.json')));
+    assert.deepEqual(ev.find(e => e.subtype === 'commit').files, ['Clients/Pagamentos.cs']);
+    assert.equal(gitIn(wt, 'status', '--porcelain'), '');
+    assert.equal((await api(`/api/worktrees/${linked}/f01-dddddd`, { method: 'DELETE' })).status, 200);
+    assert.ok(!existsSync(wt));
+  } finally { rmSync(reposFile, { force: true }); }
+
+  // Removed by the person, or swept with the feature.
+  assert.equal((await api(`/api/attachments/${a3}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await api(`/api/attachments/${a3}`)).status, 404);
+  assert.equal((await api('/api/workspace?force=1', { method: 'PUT', body: JSON.stringify({ ...ws, projects: [{ id: 'p1', name: 'Um', features: [] }] }) })).status, 200);
+  await page();
+  assert.deepEqual((await (await api(`/api/attachments?ids=${a1}`)).json()).ids, []);
+});

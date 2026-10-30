@@ -789,6 +789,11 @@ function validateRunOptions(o = {}) {
   out.forwardSubagents = o.forwardSubagents === true;
   // The tools installed on this machine at the end of the prompt (plans and feature steps).
   out.withEnv = o.withEnv === true;
+  // Feature steps: the feature's attachments (ids in the database), written to ATTACH_DIR in the working folder. [] clears it.
+  if (Array.isArray(o.attachments)) {
+    if (o.attachments.length > 20 || !o.attachments.every(id => typeof id === 'string' && /^at[0-9a-f]{16}$/.test(id))) throw new Error('Anexos inválidos.');
+    out.attachments = [...new Set(o.attachments)];
+  } else out.attachments = null;
   const timeout = Number(o.timeoutSec); out.timeoutSec = Number.isFinite(timeout) && timeout >= 10 && timeout <= 7200 ? timeout : 900;
   return out;
 }
@@ -889,9 +894,48 @@ async function startRun(body) {
   if (opts.commit) run.stepCommit = { dir: opts.cwd, root: opts.cwd, slug: '', repo: null, mapRef: false, label: run.label };
   runs.set(id, run);
   if (run.persist) try { store.insertRun(run); } catch (e) { run.persist = false; console.warn(`Histórico da execução ${id} não gravado: ${e.message}`); }
-  if (!prep) launchRun(run, resolved, args, opts, prompt);
-  else prepareRun(run, opts, prep).then(ok => { if (ok && !run.cancelled) launchRun(run, resolved, args, opts, prompt); else endRun(run); });
+  // The attachments go to the folder the agent will run in, so they are written once it is ready (after a linked run's preparing).
+  const go = () => placeAttachments(run, opts).then(() => { if (run.cancelled) endRun(run); else launchRun(run, resolved, args, opts, prompt); }, e => endRun(run, { isError: true, error: e.message }));
+  if (!prep) go();
+  else prepareRun(run, opts, prep).then(ok => { if (ok && !run.cancelled) go(); else endRun(run); });
   return run;
+}
+
+/* Feature attachments (a collection, a contract the team sent): written to ATTACH_DIR in the agent's working folder before each
+ * step, replacing what an earlier step left there, so the agent reads them with its file tools (no prompt size limit) inside the
+ * folder it may read. The pattern goes to the repository's info/exclude (shared by every worktree of a clone, and unanchored, so it
+ * also covers a monorepo subfolder): git status, the step's commit and the worktree removal never see them. */
+const ATTACH_DIR = '.squad-code';
+async function placeAttachments(run, opts) {
+  if (!opts.attachments) return;
+  const dir = path.join(opts.cwd, ATTACH_DIR, 'anexos');
+  const files = opts.attachments.length ? needStore().getAttachments(opts.attachments) : [];
+  const common = await gitRun(['rev-parse', '--git-common-dir'], opts.cwd).catch(() => '');
+  if (common) {
+    const exclude = path.resolve(opts.cwd, common, 'info', 'exclude'), cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
+    if (!cur.split(/\r?\n/).includes(`${ATTACH_DIR}/`)) { fs.mkdirSync(path.dirname(exclude), { recursive: true }); fs.appendFileSync(exclude, `${cur && !cur.endsWith('\n') ? '\n' : ''}${ATTACH_DIR}/\n`); }
+  } else if (files.length && fs.existsSync(path.join(opts.cwd, '.git'))) throw new Error('Não foi possível proteger os anexos do commit (git rev-parse falhou).');
+  fs.rmSync(dir, { recursive: true, force: true });
+  if (!files.length) return;
+  fs.mkdirSync(dir, { recursive: true });
+  const used = new Set(), placed = [];
+  for (const f of files) {
+    // Two names that differ only in case are the same file on Windows and macOS.
+    let name = f.name, n = 1;
+    while (used.has(name.toLowerCase())) { const m = f.name.match(/^(.*?)(\.[^.]*)?$/); name = `${m[1]}-${++n}${m[2] || ''}`; }
+    used.add(name.toLowerCase());
+    fs.writeFileSync(path.join(dir, name), f.text, 'utf8');
+    placed.push({ name, path: `${ATTACH_DIR}/anexos/${name}`, size: f.size });
+  }
+  const missing = opts.attachments.length - files.length;
+  pushEvent(run, { type: 'bridge', subtype: 'attachments', files: placed, missing });
+  run.promptExtra = (run.promptExtra || '') + attachNote(placed, missing);
+}
+function attachNote(placed, missing) {
+  return `\n\n## Anexos da feature\nA pessoa anexou ${placed.length === 1 ? 'este arquivo' : 'estes arquivos'} à feature. Leia antes de começar e use como fonte (contratos, exemplos, endpoints):\n` +
+    placed.map(f => `- ${f.path} (${f.size < 1024 ? `${f.size} bytes` : `${Math.round(f.size / 1024)} KB`})`).join('\n') +
+    `\nSão referência: não copie, não mova e não versione esses arquivos (ficam fora do git). Valores como {{TOKEN}} ou ***MASCARADO*** são segredos removidos: use configuração (variáveis de ambiente, user-secrets, appsettings sem valor real), nunca um valor inventado.` +
+    (missing ? `\n${missing} anexo(s) não estavam mais disponíveis neste computador.` : '') + '\n';
 }
 
 /* The preparing phase of a linked operation's run: clone, worktree and prepare, each reported as a bridge/prepare event and the
@@ -1374,6 +1418,14 @@ async function handle(req, res) {
       const key = decodeURIComponent(parts[3]);
       if (req.method === 'PUT' || req.method === 'POST') return json(res, 200, needStore().saveChat(parts[2], key, await readBody(req, MAX_WORKSPACE)));
       if (req.method === 'DELETE') return json(res, 200, needStore().deleteChat(parts[2], key));
+    }
+    // Feature attachments: POST {projectId, featureId, name, text} → metadata; GET ?ids=a,b → the ones this database has;
+    // GET /:id with the text; DELETE /:id.
+    if (parts[1] === 'attachments' && !parts[2] && req.method === 'POST') return json(res, 200, needStore().saveAttachment(await readBody(req)));
+    if (parts[1] === 'attachments' && !parts[2] && req.method === 'GET') return json(res, 200, { ok: true, ids: needStore().getAttachments(String(url.searchParams.get('ids') || '').split(',').slice(0, 50)).map(a => a.id) });
+    if (parts[1] === 'attachments' && parts[2] && !parts[3]) {
+      if (req.method === 'GET') { const [a] = needStore().getAttachments([parts[2]]); return a ? json(res, 200, { ok: true, attachment: a }) : fail(res, 404, 'Anexo não encontrado.'); }
+      if (req.method === 'DELETE') return json(res, 200, needStore().deleteAttachment(parts[2]));
     }
     if (url.pathname === '/api/claude/settings') {
       const scope = url.searchParams.get('scope') || 'user';

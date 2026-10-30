@@ -164,6 +164,14 @@ projectId, agentId, featureId, kind), events batched every 200 ms (`persistEvent
 always kept), `finishRun` on close; at start runs left `running` become `interrupted` with a synthetic exit event; newest 300 kept.
 `GET /api/runs` (`?projectId`, `limit`) lists the history, and `/api/runs/:id[/events]` fall back to it for runs not in memory; the
 console's **Histórico** (`openConsoleHistory` → `replayRun`, client `runMeta` on the four `POST /api/runs`) replays them.
+**Feature attachments** (a collection, a contract the team sent): table `attachments` (migration `user_version` 2, outside the
+workspace sync; text only, `ATTACH_MAX` 512 KB, 20 per feature, `attachName` strips paths and reserved names, same name in a feature
+replaces). `POST /api/attachments {projectId, featureId, name, text}`, `GET ?ids=` (which ones this database has), `GET|DELETE /:id`;
+`sweep` drops those of features that no longer exist. A step sent with `attachments: [ids]` gets them written by `placeAttachments`
+(after the preparing phase, before claude) to `<cwd>/.squad-code/anexos/`, replacing what an earlier step left (`[]` clears it), with
+`.squad-code/` in the repository's `info/exclude` (`git rev-parse --git-common-dir`, so every worktree and a monorepo subfolder are
+covered): git status, `commitStep` and `removeWorktree` never see them. A `bridge`/`attachments` event lists them (`missing` count) and
+`attachNote` appends their paths to the prompt.
 Squad colleagues: the `agents` option (whitelisted CLI subagent fields: `description`, `prompt`, `tools`, `model`, `effort`) is written
 to a temp file passed as `--agents <file>`, and `forwardSubagents:true` adds `--forward-subagent-text`. Runs with agents get
 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, so an `Agent` tool call runs in the foreground and its tool_result is the colleague's
@@ -402,6 +410,14 @@ that repository, then `PUT /api/repos/:id` with the new `baseBranch`, so it appl
   files are never written; `CLAUDE.md` = `SQUAD_IMPORT` only when the repository has none), commits, removes the worktree and drops
   the branch when nothing changed (line endings ignored). `showExportResult` reports it and **Enviar branch** goes through
   `pushSquadBranch` (shared with the merge notice).
+- Feature attachments: ANEXOS in the feature editor (`feAttachHTML` in `#feAttach`, `#feAttachInput`, bridge only). `f.attachments`
+  (persisted, normalized) holds `{id, name, size, sha, at, summary, masked}`; the text lives in the bridge's table. Uploads and removals
+  apply at once to the draft and the saved feature (`feAttachSet`), not with "Salvar feature". `attachSecrets` finds secrets (sensitive
+  headers and JSON keys, Postman `{key,value}`, escaped `body.raw`, Bearer/Basic, JWT, `curl -u`; `{{placeholders}}` stay) and asks in
+  place (`ui.attachPending`, never `confirmAction`) with "Mascarar" checked (`***MASCARADO***`). `attachSummary` (Postman, Insomnia,
+  OpenAPI, HAR, curl blocks, else the beginning) goes to the commander's plan and the co-writing chat (`attachPromptBlock`), which have
+  no tools; `executeLiveStep` sends the ids as `attachments`. `feAttachCheck` marks the ones this database lacks (another computer, a
+  restored version) as unavailable. No backup, export or demo support on purpose.
 - Features carry `route` (ordered agent ids) built by `routeFor`, which maps scopes to roles with
   `ROLE_FAMILY` (e.g. node/java/dotnet cover the backend step). A finished route sends the feature to
   human review; only approval marks it done and unblocks dependents.

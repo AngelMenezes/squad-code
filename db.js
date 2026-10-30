@@ -31,6 +31,10 @@ const REF_RE = /^[A-Za-z0-9_-]{1,100}$/;
 const CHAT_KEY_RE = { feature: REF_RE, agent: REF_RE, doc: /^[A-Za-z0-9_:+-]{1,800}$/ };
 const ROOM_KINDS = new Set(['system', 'say', 'call', 'baton', 'plan', 'review']);
 const RUN_KINDS = new Set(['step', 'plan', 'chat', 'cowrite', 'doc', 'spawn']);
+// Feature attachments (a collection, a contract): text files up to ATTACH_MAX bytes, ATTACH_PER_FEATURE per feature.
+const ATTACH_MAX = 512 * 1024;
+const ATTACH_PER_FEATURE = 20;
+const ATTACH_ID_RE = /^at[0-9a-f]{16}$/;
 
 /* Entity tree of the workspace: `key` is the path of the array on the parent object, `cols` become generated columns, `keyOf`
    names a row inside its parent (default: the entity id). Adding a child array to the workspace means adding it here. */
@@ -133,6 +137,17 @@ CREATE INDEX runs_project ON runs (project_id, started_at);
 CREATE TABLE run_events (run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, seq INTEGER NOT NULL, type TEXT, data TEXT NOT NULL, PRIMARY KEY (run_id, seq));
 `;
 }
+// Version 2: attachments stay out of the workspace (it is sent whole on every save); the feature keeps only their metadata.
+const ATTACH_SCHEMA = `
+CREATE TABLE attachments (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, feature_id TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, sha TEXT NOT NULL, created_at TEXT NOT NULL, content TEXT NOT NULL);
+CREATE INDEX attachments_feature ON attachments (feature_id);
+`;
+/** A file name that is safe in any folder of any system: no path, no reserved characters or names, at most 120 characters. */
+function attachName(name) {
+  let n = String(name || '').split(/[\\/]/).pop().replace(/[<>:"|?*\u0000-\u001f]/g, '_').replace(/^[\s.]+|[\s.]+$/g, '').slice(-120);
+  if (/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(n)) n = `_${n}`;
+  return n || 'anexo.txt';
+}
 
 /** Synchronous rename that waits a little when Windows holds the file (antivirus, an editor). */
 function moveSync(from, to) {
@@ -151,6 +166,7 @@ function openStore(dataDir) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   if (db.pragma('user_version', { simple: true }) < 1) db.transaction(() => { db.exec(schema()); db.pragma('user_version = 1'); })();
+  if (db.pragma('user_version', { simple: true }) < 2) db.transaction(() => { db.exec(ATTACH_SCHEMA); db.pragma('user_version = 2'); })();
 
   const q = {
     metaGet: db.prepare('SELECT value FROM meta WHERE key = ?').pluck(),
@@ -171,6 +187,11 @@ function openStore(dataDir) {
     chatUpsert: db.prepare('INSERT INTO chats (kind, key, project_id, ref_id, updated_at, data) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (kind, key) DO UPDATE SET project_id = excluded.project_id, ref_id = excluded.ref_id, updated_at = excluded.updated_at, data = excluded.data'),
     chatDelete: db.prepare('DELETE FROM chats WHERE kind = ? AND key = ?'),
     chatAll: db.prepare('SELECT kind, key, data FROM chats'),
+    attachInsert: db.prepare('INSERT INTO attachments (id, project_id, feature_id, name, size, sha, created_at, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
+    attachGet: db.prepare('SELECT * FROM attachments WHERE id = ?'),
+    attachByName: db.prepare('SELECT id FROM attachments WHERE feature_id = ? AND name = ?').pluck(),
+    attachCount: db.prepare('SELECT count(*) FROM attachments WHERE feature_id = ?').pluck(),
+    attachDelete: db.prepare('DELETE FROM attachments WHERE id = ?'),
     runInsert: db.prepare('INSERT INTO runs (id, status, label, kind, project, project_id, agent_id, feature_id, cwd, started_at, args) VALUES (@id, @status, @label, @kind, @project, @projectId, @agentId, @featureId, @cwd, @startedAt, @args)'),
     runEvent: db.prepare('INSERT OR IGNORE INTO run_events (run_id, seq, type, data) VALUES (?, ?, ?, ?)'),
     runCount: db.prepare('UPDATE runs SET events = max(events, ?) WHERE id = ?'),
@@ -353,11 +374,36 @@ function openStore(dataDir) {
     for (const r of q.chatAll.all()) if (out[r.kind]) { try { out[r.kind][r.key] = JSON.parse(r.data); } catch {} }
     return out;
   }
-  /** Chats and rooms of features, agents or projects that no longer exist (outside the workspace sync, so restoring a version
-      brings them back until the next start). */
+  /* ---------- feature attachments ---------- */
+  /** Stores a text file of a feature; a file with the same name in that feature is replaced (its id comes back as `replaced`). */
+  function saveAttachment(body) {
+    const projectId = body?.projectId, featureId = body?.featureId, text = body?.text;
+    if (typeof projectId !== 'string' || !REF_RE.test(projectId) || typeof featureId !== 'string' || !REF_RE.test(featureId)) throw bad('Feature inválida.');
+    if (typeof text !== 'string') throw bad('Anexo sem conteúdo.');
+    const size = Buffer.byteLength(text, 'utf8');
+    if (size > ATTACH_MAX) throw bad(`O anexo passa de ${ATTACH_MAX / 1024} KB.`, 413);
+    const name = attachName(body.name), same = q.attachByName.get(featureId, name);
+    if (!same && q.attachCount.get(featureId) >= ATTACH_PER_FEATURE) throw bad(`Até ${ATTACH_PER_FEATURE} anexos por feature.`, 409);
+    const meta = { id: `at${crypto.randomBytes(8).toString('hex')}`, name, size, sha: hash(text), at: nowISO() };
+    db.transaction(() => {
+      if (same) q.attachDelete.run(same);
+      q.attachInsert.run(meta.id, projectId, featureId, name, size, meta.sha, meta.at, text);
+    })();
+    return { ok: true, attachment: meta, replaced: same || null };
+  }
+  /** Attachments by id, with their content (the missing ones are left out). */
+  function getAttachments(ids) {
+    return (Array.isArray(ids) ? ids : []).filter(id => typeof id === 'string' && ATTACH_ID_RE.test(id)).map(id => q.attachGet.get(id)).filter(Boolean)
+      .map(r => ({ id: r.id, projectId: r.project_id, featureId: r.feature_id, name: r.name, size: r.size, sha: r.sha, at: r.created_at, text: r.content }));
+  }
+  function deleteAttachment(id) { if (typeof id !== 'string' || !ATTACH_ID_RE.test(id)) throw bad('Anexo inválido.'); q.attachDelete.run(id); return { ok: true }; }
+
+  /** Chats, rooms and attachments of features, agents or projects that no longer exist (outside the workspace sync, so restoring
+      a version brings the chats and rooms back until the next start). */
   function sweep() {
     if (!q.root.get()) return;
     db.transaction(() => {
+      db.prepare('DELETE FROM attachments WHERE feature_id NOT IN (SELECT key FROM features)').run();
       db.prepare(`DELETE FROM chats WHERE (kind = 'feature' AND ref_id NOT IN (SELECT key FROM features)) OR (kind = 'agent' AND ref_id NOT IN (SELECT key FROM agents)) OR (kind = 'doc' AND project_id NOT IN (SELECT key FROM projects))`).run();
       db.prepare('DELETE FROM room_messages WHERE project_id NOT IN (SELECT key FROM projects)').run();
       db.prepare('DELETE FROM room_state WHERE project_id NOT IN (SELECT key FROM projects)').run();
@@ -400,6 +446,7 @@ function openStore(dataDir) {
     file, migration, interrupted, runMeta,
     syncWorkspace, readWorkspace, backupWorkspace, listSnapshots, getSnapshot,
     saveRoom, loadRooms, saveChat, deleteChat, loadChats, sweep,
+    saveAttachment, getAttachments, deleteAttachment,
     insertRun, appendRunEvents, finishRun, listRuns, getRun, runEvents,
     close: () => db.close(),
   };
