@@ -347,7 +347,8 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   sprint; the editor locks its sprint and shows it as a fixed dependency of new features (`featureDraftFor`). The seed's F00 is done.
 - Toolchains: `ui.toolchains` (transient, `loadToolchains` once after `checkBridge` and on `env-refresh`) feeds Configurações >
   Ambiente (tab `env`, `renderEnvPane`) and `envNoticeHTML` in the features head: the tools whose `STACK_HINTS` match the project's
-  briefing, architecture, scope or ADRs and are not installed. `executeLiveStep` and the commander's plan send `withEnv: true`. The setup
+  architecture (once written; before that, briefing and scope; never the ADRs, which compare discarded options) and are not
+  installed; a mention negated in its own clause ("Java não é uma opção", `STACK_NEG` in `stackNamed`) does not count. `executeLiveStep` and the commander's plan send `withEnv: true`. The setup
   F00 asks for the README's prerequisites with exact versions (`SETUP_PREV` keeps the earlier criteria/tasks for `ensureSetup`).
 - New project (no `repoId`): `executeLiveStep` sends `commit: true`, so the bridge commits each step in the operation folder.
   `project.remote` (persisted; wizard or the briefing's REPOSITÓRIO REMOTO, `.if-new`) is where **Enviar para o remoto**
