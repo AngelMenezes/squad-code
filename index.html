@@ -12200,7 +12200,11 @@ function coWritePrompt(a,msgs){
 // Chat bubbles never show a dash used as punctuation (em/en dash, or a hyphen between spaces). Code and numeric ranges stay.
 function chatClean(t){return String(t||'').split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part,i)=>i%2?part:part.replace(/^([ \t]*)[—–][ \t]*/gm,'$1').replace(/[ \t]*[—–][ \t]*$/gm,'').replace(/(\S)([ \t]*)[—–]([ \t]*)(?=(\S))/g,(m,a,s1,s2,b)=>!s1&&!s2&&/\d/.test(a)&&/\d/.test(b)?m:a+', ').replace(/(\S)[ \t]+-[ \t]+(?=\S)/g,'$1, ').replace(/,[ \t]*([,.;:!?])/g,'$1').replace(/(\S)[ \t]{2,}/g,'$1 ')).join('').trim();}
 function lenientJSON(src){try{return JSON.parse(src);}catch{}let out='',str=false,esc=false;for(const ch of String(src)){if(str){if(esc){esc=false;out+=ch;continue;}if(ch==='\\'){esc=true;out+=ch;continue;}if(ch==='"')str=false;out+=ch==='\n'?'\\n':ch==='\r'?'':ch==='\t'?'\\t':ch;}else{if(ch==='"')str=true;out+=ch;}}try{return JSON.parse(out);}catch{return null;}}
-function parseCoWrite(text){const t=String(text||''),blocks=[...t.matchAll(/```json\s*([\s\S]*?)```/gi)],last=blocks.at(-1);let data=null;if(last)data=lenientJSON(last[1]);return{reply:(last?t.slice(0,last.index)+t.slice(last.index+last[0].length):t).trim(),data};}
+// A field may hold its own fences (```mermaid in the architecture), so a ```json block closes at the first ``` that ends valid JSON,
+// not at the first ``` (a fence inside a string leaves it open and never parses). The last such block wins; none parsed: the old cut.
+function parseCoWrite(text){const t=String(text||''),open=/```json[ \t]*/gi;let hit=null,m;while((m=open.exec(t))){const body=m.index+m[0].length;for(let end=t.indexOf('```',body);end>=0;end=t.indexOf('```',end+3)){const data=lenientJSON(t.slice(body,end));if(data!==null){hit={start:m.index,end:end+3,data};open.lastIndex=end+3;break;}}}
+ if(hit)return{reply:(t.slice(0,hit.start)+t.slice(hit.end)).trim(),data:hit.data};
+ const last=[...t.matchAll(/```json\s*([\s\S]*?)```/gi)].at(-1);return{reply:(last?t.slice(0,last.index)+t.slice(last.index+last[0].length):t).trim(),data:last?lenientJSON(last[1]):null};}
 // The agents' way to ask (claude -p has no AskUserQuestion): "ask" in the reply's ```json block, one question with 2 to 6
 // short options that become buttons (id 'ask'); the person may also just write. The question closes the bubble text.
 function chatAsk(data){let q=data&&typeof data==='object'?data.ask:null;if(Array.isArray(q))q=q[0];if(!q||typeof q!=='object')return null;const question=chatClean(String(q.question||'').slice(0,300)),options=[...new Set((Array.isArray(q.options)?q.options:[]).map(o=>String(o&&typeof o==='object'?o.label??'':o??'').trim().slice(0,80)).filter(Boolean))].slice(0,6);return options.length>=2?{question,options}:null;}
@@ -12402,7 +12406,7 @@ function docCoWritePrompt(a,c,msgs,turn){
  const team=(q?.agentIds||[]).map(agentById).filter(Boolean).map(x=>`- ${x.name}: ${roleLabel(x)}${x.id===a.id?' (você)':c.group?.includes(x.id)?' (na reunião)':''}`).join('\n');
  const feats=ui.opsNew?fv('features').split('\n').map(t=>t.trim()).filter(Boolean).map(t=>`- ${t}`).join('\n'):cur.sprints.map(s=>{const fs=sprintFeatures(s,cur);return fs.length?`### ${s.name}${s.goal?`: ${s.goal}`:''}\n${fs.map(f=>`- ${f.key}: ${f.title} (${SCOPES[f.scope]||f.scope}, ${f.priority})`).join('\n')}`:'';}).filter(Boolean).join('\n');
  const guests=[...(c.guests||[])].map(([id,g])=>`- ${agentById(id)?.name||id}: chamado por ${g.by}${g.reason?`, para: ${g.reason}`:''}`).join('\n'),called=c.guests?.get(a.id);
- const adrs=def.adrs?adrValues($('#docAdrList')).map((x,i)=>`#### ${num(i)}: ${x.title.trim()||'(sem título)'} (${x.status})\n${acClip(x.content,1200)||'(sem conteúdo)'}`).join('\n\n'):'';
+ const adrs=def.adrs?adrValues($('#docAdrList')).map((x,i)=>`#### ${num(i)}: ${x.title.trim()||'(sem título)'} (${x.status})\n${String(x.content||'').trim()||'(sem conteúdo)'}`).join('\n\n'):''; // whole: revising an ADR means sending it whole
  const now=def.fields.map(f=>`### ${FE_FIELD_LABEL[f.field]}\n${mv(f.id)||'(vazio)'}`).join('\n\n')+(def.adrs?`\n\n### ADRs\n${adrs||'(nenhum registrado)'}`:'');
  const agenda=teamsAgenda().map(x=>`- ${x.label}: ${x.done?'ok':'falta'} (${x.detail})`).join('\n');
  const hellos=(c.group||[c.agentId]).map(id=>[agentById(id)?.name||a.name,chatGreeting(c,agentById(id))]).filter(([,t])=>t).map(([n,t])=>`${n}: ${t}`);
@@ -13725,10 +13729,17 @@ function renderEnvPane(){
 }
 // Tools the project's own text names (briefing, architecture, scope, ADRs) and this machine lacks: a notice before anything runs.
 const STACK_HINTS={dotnet:/\.net\b|dotnet|\bc#|asp\.net|blazor|entity framework/i,node:/node\.?js|\bnpm\b|\breact\b|\bangular\b|\bvue\b|next\.js|nestjs|typescript|\bvite\b/i,python:/python|django|flask|fastapi|pytest/i,java:/\bjava\b|spring boot|\bmaven\b|\bgradle\b|kotlin/i,go:/\bgolang\b|go\.mod|\b(em|com|usando|linguagem)\s+go\b/i,flutter:/flutter|\bdart\b/i,rust:/\brust\b|\bcargo\b/i,docker:/docker/i};
+// The architecture is where the stack is decided, so once it is written it is the only source (ADRs compare discarded options);
+// before that, the briefing and the scope. A mention negated in its own clause ("Java não é uma opção", "sem Java") does not count.
+const STACK_NEG=/(^|[^\p{L}])(não|nao|nunca|nem|sem|fora|exceto|descartad\p{L}*|rejeitad\p{L}*)(?!\p{L})/iu;
+function stackNamed(text,re){
+ const g=new RegExp(re.source,'gi');for(const m of text.matchAll(g)){const before=text.slice(Math.max(0,m.index-20),m.index).split(/[.;:,()\n]/).at(-1),after=text.slice(m.index+m[0].length,m.index+m[0].length+25).split(/[.;:,()\n]/)[0];if(!STACK_NEG.test(before)&&!STACK_NEG.test(after))return true;}
+ return false;
+}
 function envMissing(p){
  const tc=ui.toolchains?.tools;if(!tc?.length||!p)return[];
- const text=[p.briefing,p.architecture,p.scopeIn,...(p.adrs||[]).map(a=>`${a.title}\n${a.content}`)].join('\n');
- return Object.keys(STACK_HINTS).filter(k=>STACK_HINTS[k].test(text)).map(k=>tc.find(t=>t.id===k)).filter(t=>t&&!t.found);
+ const text=String(p.architecture||'').trim()||[p.briefing,p.scopeIn].join('\n');
+ return Object.keys(STACK_HINTS).filter(k=>stackNamed(text,STACK_HINTS[k])).map(k=>tc.find(t=>t.id===k)).filter(t=>t&&!t.found);
 }
 function envSig(p){return envMissing(p).map(t=>t.id).join();}
 function envNoticeHTML(p){
