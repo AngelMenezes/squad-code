@@ -3,7 +3,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, unlinkSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -903,6 +903,115 @@ test('Windows: a worktree whose paths pass 260 characters is created (core.longp
     const events = await collect((await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: folder, repo: 'deep', feature: 'f01-aaaaaa' } }) })).json()).runId);
     assert.equal(events.at(-1).status, 'done', JSON.stringify(events.at(-1)));
     assert.ok(existsSync(path.join(wt, deep, 'arquivo.py')));
+  } finally { rmSync(reposFile, { force: true }); }
+});
+
+test('the review desk reads what a feature changed, before and after approval, without touching the repository', async t => {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('git não instalado'); }
+  const src = tmp('squad-src-'); extraDirs.push(src);
+  const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  gitIn(src, 'init', '-q'); gitIn(src, 'checkout', '-q', '-b', 'main');
+  writeFileSync(path.join(src, 'app.py'), 'print(1)\n'); writeFileSync(path.join(src, 'velho.py'), 'x\n');
+  gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'init');
+  const reposFile = path.join(dataRoot, 'repos.json');
+  writeFileSync(reposFile, JSON.stringify({ repos: [{ id: 'changes', path: src, baseBranch: 'main' }] }));
+  const run = async (folder, label, prompt, options) => {
+    const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt, label, options: { project: folder, ...options } }) });
+    assert.equal(res.status, 201, await res.clone().text());
+    await collect((await res.json()).runId);
+  };
+  const changes = async (folder, query) => { const res = await api(`/api/changes/${folder}?${query}`); return { status: res.status, body: await res.json() }; };
+  const names = r => r.body.files.map(f => f.path);
+  try {
+    // Linked: the branch against where it started, with the worktree's uncommitted work.
+    const folder = 'op-091-changes', root = path.join(projectsRoot, folder), wt = path.join(root, '.wt', 'f01-aaaaaa'), q = 'repo=changes&feature=f01-aaaaaa';
+    await run(folder, 'PROPHET / F01', 'WRITE:src/novo.py', { repo: 'changes', feature: 'f01-aaaaaa' });
+    writeFileSync(path.join(src, 'base-depois.py'), 'y\n'); gitIn(src, 'add', '.'); gitIn(src, 'commit', '-q', '-m', 'base seguiu');
+    gitIn(root, 'fetch', '-q', 'origin');
+    writeFileSync(path.join(wt, 'app.py'), 'print(2)\n'); rmSync(path.join(wt, 'velho.py'));
+    writeFileSync(path.join(wt, 'ação é.txt'), 'um\ndois\n'); writeFileSync(path.join(wt, 'dados.bin'), Buffer.from([1, 0, 2]));
+    const before = gitIn(wt, 'status', '--porcelain');
+    const live = await changes(folder, q);
+    assert.equal(live.body.branch, 'squad/f01-aaaaaa');
+    assert.equal(live.body.dir.toLowerCase(), realpathSync.native(wt).toLowerCase());
+    assert.deepEqual(names(live), ['ação é.txt', 'app.py', 'dados.bin', 'src/novo.py', 'velho.py'].sort((a, b) => a.localeCompare(b)));
+    const by = Object.fromEntries(live.body.files.map(f => [f.path, f]));
+    assert.deepEqual([by['app.py'].status, by['app.py'].adds, by['app.py'].dels], ['M', 1, 1]);
+    assert.equal(by['velho.py'].status, 'D');
+    assert.deepEqual([by['src/novo.py'].status, by['src/novo.py'].pending], ['A', false]);
+    assert.deepEqual([by['ação é.txt'].status, by['ação é.txt'].adds, by['ação é.txt'].pending], ['A', 2, true]);
+    assert.equal(by['dados.bin'].binary, true);
+    assert.match((await changes(folder, `${q}&file=app.py`)).body.parts[0].diff, /-print\(1\)\n\+print\(2\)/);
+    assert.match((await changes(folder, `${q}&file=${encodeURIComponent('ação é.txt')}`)).body.parts[0].diff, /^@@ -0,0 \+1,2 @@\n\+um\n\+dois\n$/);
+    // Only a listed file is served, and reading changes nothing.
+    assert.equal((await changes(folder, `${q}&file=${encodeURIComponent('../../fora.txt')}`)).status, 404);
+    assert.equal((await changes(folder, `${q}&file=base-depois.py`)).status, 404);
+    assert.equal(gitIn(wt, 'status', '--porcelain'), before);
+    assert.equal((await changes(folder, `${q}&ranges=--x`)).status, 400);
+    // After approval the worktree is gone and the branch still answers (only what was committed, no folder to open).
+    gitIn(wt, 'checkout', '-q', '--', '.'); unlinkSync(path.join(wt, 'ação é.txt')); rmSync(path.join(wt, 'dados.bin'));
+    assert.deepEqual(await (await api(`/api/worktrees/${folder}/f01-aaaaaa`, { method: 'DELETE' })).json(), { ok: true, removed: true, branch: 'squad/f01-aaaaaa' });
+    const gone = await changes(folder, q);
+    assert.equal(gone.body.dir, null);
+    assert.deepEqual(names(gone), ['src/novo.py']);
+    assert.equal((await changes(folder, 'repo=changes&feature=f09-nunca')).body.exists, false);
+    assert.equal((await changes(folder, 'repo=outro&feature=f01-aaaaaa')).status, 400);
+    assert.equal((await changes(folder, 'repo=changes&feature=../x')).status, 400);
+    // New project: only the commits of that feature, together, plus what is not committed.
+    const fresh = 'op-092-changes', freshRoot = path.join(projectsRoot, fresh);
+    await run(fresh, 'PROPHET / F01', 'WRITE:a.txt', { commit: true });
+    await run(fresh, 'ORACLE / F02', 'WRITE:b.txt', { commit: true });
+    writeFileSync(path.join(freshRoot, 'a.txt'), 'segunda etapa\n');
+    await run(fresh, 'ORACLE / F01', 'WRITE:c.txt', { commit: true });
+    writeFileSync(path.join(freshRoot, 'rascunho.txt'), 'sem commit\n');
+    const f01 = await changes(fresh, 'key=F01');
+    assert.equal(f01.body.commits, 2);
+    assert.deepEqual(names(f01), ['a.txt', 'c.txt', 'rascunho.txt']);
+    assert.equal(f01.body.files[0].status, 'A');
+    assert.equal(f01.body.files[0].pending, false);
+    assert.equal(f01.body.files[2].pending, true);
+    const a = (await changes(fresh, 'key=F01&file=a.txt')).body.parts;
+    assert.equal(a.length, 2);
+    assert.match(a[0].label, /^[0-9a-f]+ SQUAD\/CODE: PROPHET \/ F01$/);
+    assert.match(a[1].diff, /\+segunda etapa/);
+    // A deleted feature's key that came back: its old commits stay out.
+    assert.equal((await changes(fresh, `key=F01&since=${Math.floor(Date.now() / 1000) + 60}`)).body.commits, 0);
+    assert.equal((await changes(fresh, 'key=F01&until=1000')).body.commits, 0);
+    // Each step reports its range of HEAD: a commit with the agent's own message counts, starting from a folder with no commit yet.
+    const own = 'op-094-changes', ownRoot = path.join(projectsRoot, own);
+    const step = async (label, prompt) => {
+      const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt, label, options: { project: own, commit: true } }) });
+      assert.equal(res.status, 201, await res.clone().text());
+      return (await collect((await res.json()).runId)).at(-1);
+    };
+    const short = r => `${r.from.slice(0, 12)}..${r.to.slice(0, 12)}`;
+    const first = await step('PROPHET / F01', 'WRITE:primeiro.txt AGENTCOMMIT');
+    assert.equal(first.status, 'done');
+    assert.equal(first.range.from, '');
+    assert.equal(first.range.to, gitIn(ownRoot, 'rev-parse', 'HEAD'));
+    assert.equal(gitIn(ownRoot, 'log', '-1', '--format=%s'), 'feat: commit do agente');
+    const second = await step('ORACLE / F02', 'WRITE:outra.txt');
+    assert.equal(second.range.from, first.range.to);
+    const third = await step('PROPHET / F01', 'WRITE:terceiro.txt');
+    const f = await changes(own, `ranges=${short(first.range)},${short(third.range)}`);
+    assert.equal(f.body.commits, 2);
+    assert.deepEqual(names(f), ['primeiro.txt', 'terceiro.txt']);
+    assert.equal(f.body.files[0].pending, false);
+    assert.match((await changes(own, `ranges=${short(first.range)}&file=primeiro.txt`)).body.parts[0].label, /feat: commit do agente$/);
+    // A step that changed nothing leaves an empty range; a commit rewritten away is reported, not an error; a range cannot carry anything else.
+    const quiet = await step('PROPHET / F01', 'conferir');
+    assert.equal(quiet.range.from, quiet.range.to);
+    assert.equal((await changes(own, `ranges=${short(quiet.range)}`)).body.commits, 0);
+    const lost = await changes(own, `ranges=${'a'.repeat(40)}..${'b'.repeat(40)},${short(third.range)}`);
+    assert.deepEqual([lost.body.missing, names(lost)], [1, ['terceiro.txt']]);
+    assert.equal((await changes(own, 'ranges=--output=x..abc')).status, 400);
+    assert.equal((await changes(own, '')).status, 400);
+    // A failed step still reports its range.
+    const failed = await step('PROPHET / F01', 'WRITE:falhou.txt AGENTCOMMIT FAIL');
+    assert.equal(failed.isError, true);
+    assert.ok(failed.range);
+    assert.equal((await changes(fresh, 'key=F01%20x')).status, 400);
+    assert.equal((await changes('op-093-nada', 'key=F01')).body.exists, false);
   } finally { rmSync(reposFile, { force: true }); }
 });
 

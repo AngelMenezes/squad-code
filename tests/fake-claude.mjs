@@ -35,6 +35,8 @@ process.stdin.on('end', () => {
   if (input.includes('FAIL')) { process.stderr.write('fake failure\n'); emit({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'fake failure', session_id: 'fake-session' }); process.exit(1); }
   // WRITE:<path> in the prompt: write that file in the cwd, as an agent's edit would.
   for (const [, file] of input.matchAll(/WRITE:([\w./-]+)/g)) { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, `escrito pelo agente: ${file}\n`); }
+  // AGENTCOMMIT in the prompt: the agent commits its own work, with its own message.
+  if (input.includes('AGENTCOMMIT')) { execFileSync('git', ['add', '-A'], { stdio: 'ignore' }); execFileSync('git', ['-c', 'user.name=agente', '-c', 'user.email=agente@x', 'commit', '-q', '-m', 'feat: commit do agente'], { stdio: 'ignore' }); }
   // IMAGE in the prompt: read an image and a PDF, as Claude Code streams them (base64 in the tool_result and in tool_use_result).
   if (input.includes('IMAGE')) {
     const png = 'iVBORw0KGgoFAKEIMAGE' + 'A'.repeat(200_000), pdf = 'JVBERi0xFAKEPDF' + 'B'.repeat(300_000);

@@ -569,6 +569,93 @@ async function commitStep(run) {
   } catch (e) { pushEvent(run, { type: 'bridge', subtype: 'commit', commit: null, error: e.message }); }
 }
 
+/* What a feature changed, for the review desk (GET /api/changes, read only). A linked feature: its branch against the commit it started
+ * from (startMark, so a base that moved on does not show up), with the worktree's uncommitted work while the worktree exists. A new
+ * project has one branch: each step's range of HEAD (stepStart/stepEnd, sent in the exit event and kept in the output), so a commit
+ * the agent made itself counts too, plus what the folder has uncommitted. Outputs from before the ranges find their commits by the
+ * message commitStep writes ("SQUAD/CODE: <agent> / <key>"), between `since` and `until`, since a deleted feature's key can come back.
+ * A diff is only served for a listed file. */
+const CHANGES_MAX = 500, DIFF_MAX = 400 * 1024, RANGE_RE = /^([0-9a-f]{7,40})?\.\.([0-9a-f]{7,40})$/;
+// Git knows this object in every repository: the "before" of a step that started with no commit yet.
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+const headOf = dir => gitRun(['rev-parse', '--verify', '-q', 'HEAD'], dir).catch(() => '');
+async function stepStart(run) { if (run.stepCommit && !run.stepCommit.repo) run.stepFrom = await headOf(run.stepCommit.dir); }
+async function stepEnd(run) { const to = await headOf(run.stepCommit.dir); if (to) run.stepRange = { from: run.stepFrom, to }; }
+const gitText = (args, cwd) => new Promise((resolve, reject) => {
+  execFile('git', args, { cwd, windowsHide: true, timeout: 30000, maxBuffer: DIFF_MAX, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling(), GIT_TERMINAL_PROMPT: '0' } },
+    (err, out, errOut) => err && err.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? reject(new Error(String(errOut || err.message).trim().slice(0, 500))) : resolve({ text: String(out), truncated: !!err }));
+});
+async function changeSources(root, repo, slug, { key, since, until, ranges }) {
+  if (repo) {
+    const wt = path.join(root, WT_DIR, slug), branch = `squad/${slug}`, live = fs.existsSync(path.join(wt, '.git'));
+    if (!live && !await gitOk(['rev-parse', '--verify', '-q', `refs/heads/${branch}`], root)) return { exists: false, sources: [] };
+    let base = ''; try { base = fs.readFileSync(startMark(root, slug), 'utf8').trim(); } catch {}
+    if (!/^[0-9a-f]{40}$/.test(base)) base = await gitRun(['merge-base', branch, baseRef(repo)], root).catch(() => '');
+    if (!base) return { exists: false, sources: [] };
+    return { exists: true, dir: live ? wt : null, branch, base: base.slice(0, 7), untrackedIn: live ? wt : null, sources: [{ label: '', cwd: live ? wt : root, cmd: live ? ['diff', '--no-renames', base] : ['diff', '--no-renames', base, branch] }] };
+  }
+  const log = key ? await gitRun(['log', '-n', '500', '--format=%h%x09%ct%x09%s', '--fixed-strings', `--grep= / ${key}`], root).catch(() => '') : '';
+  const commits = log.split('\n').map(l => l.split('\t')).filter(([, at, s]) => /^SQUAD\/CODE: /.test(s || '') && s.endsWith(` / ${key}`) && Number(at) >= since && Number(at) <= until).reverse();
+  const sources = commits.map(([h, , s]) => ({ label: `${h} ${s}`, cwd: root, cmd: ['show', '--format=', '--no-renames', h] }));
+  let count = commits.length, missing = 0;
+  // A range the agent rewrote away (reset, rebase and gc) can no longer be compared: it is reported, the others still answer.
+  for (const range of ranges) {
+    const [, from = '', to] = range.match(RANGE_RE);
+    if (!await gitOk(['cat-file', '-e', `${to}^{commit}`], root) || (from && !await gitOk(['cat-file', '-e', `${from}^{commit}`], root))) { missing++; continue; }
+    const subjects = (await gitRun(['log', '-n', '500', '--format=%s', from ? `${from}..${to}` : to], root)).split('\n').filter(Boolean);
+    if (!subjects.length) continue;
+    count += subjects.length;
+    sources.push({ label: `${to.slice(0, 7)} ${subjects[0]}${subjects.length > 1 ? ` (e mais ${subjects.length - 1})` : ''}`, cwd: root, cmd: ['diff', '--no-renames', from || EMPTY_TREE, to] });
+  }
+  if (await gitOk(['rev-parse', '--verify', '-q', 'HEAD'], root)) sources.push({ label: 'Sem commit', pending: true, cwd: root, cmd: ['diff', '--no-renames', 'HEAD'] });
+  return { exists: true, dir: root, commits: count, missing, untrackedIn: root, sources };
+}
+async function changeList(scope) {
+  const files = new Map();
+  for (const src of scope.sources) {
+    const status = (await gitRun([...src.cmd, '--name-status', '-z'], src.cwd, 30000)).split('\0'), nums = (await gitRun([...src.cmd, '--numstat', '-z'], src.cwd, 30000)).split('\0');
+    for (let i = 0; i + 1 < status.length; i += 2) {
+      const name = status[i + 1], cur = files.get(name);
+      files.set(name, { path: name, status: !cur ? status[i][0] : status[i][0] === 'D' ? 'D' : cur.status === 'A' ? 'A' : 'M', adds: cur?.adds || 0, dels: cur?.dels || 0, binary: !!cur?.binary, pending: !!cur?.pending || !!src.pending });
+    }
+    for (const line of nums) {
+      const [adds, dels, ...name] = line.split('\t'), file = files.get(name.join('\t'));
+      if (!file) continue;
+      if (adds === '-') file.binary = true; else { file.adds += Number(adds); file.dels += Number(dels); }
+    }
+  }
+  if (scope.untrackedIn) for (const name of (await gitRun(['ls-files', '--others', '--exclude-standard', '-z'], scope.untrackedIn, 30000)).split('\0').filter(Boolean)) {
+    if (files.size >= CHANGES_MAX * 2) break;
+    const body = untrackedBody(scope.untrackedIn, name);
+    files.set(name, { path: name, status: 'A', adds: body.lines, dels: 0, binary: body.binary, pending: true, untracked: true });
+  }
+  return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+function untrackedBody(dir, name) {
+  try {
+    const file = path.join(dir, ...name.split('/')), stat = fs.lstatSync(file);
+    if (!stat.isFile()) return { text: '', lines: 0, binary: true, truncated: false };
+    const fd = fs.openSync(file, 'r'), buf = Buffer.alloc(Math.min(stat.size, DIFF_MAX));
+    try { fs.readSync(fd, buf, 0, buf.length, 0); } finally { fs.closeSync(fd); }
+    if (buf.includes(0)) return { text: '', lines: 0, binary: true, truncated: false };
+    const text = buf.toString('utf8');
+    return { text, lines: text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0, binary: false, truncated: stat.size > DIFF_MAX };
+  } catch { return { text: '', lines: 0, binary: false, truncated: false }; }
+}
+async function changeDiff(scope, file) {
+  if (file.untracked) {
+    const body = untrackedBody(scope.untrackedIn, file.path), lines = body.text.replace(/\n$/, '').split('\n');
+    return { parts: [{ label: 'Sem commit', diff: body.text ? `@@ -0,0 +1,${lines.length} @@\n${lines.map(l => '+' + l).join('\n')}\n` : '' }], truncated: body.truncated };
+  }
+  const parts = []; let truncated = false;
+  for (const src of scope.sources) {
+    const r = await gitText([...src.cmd, '--no-color', '--no-ext-diff', '--', file.path], src.cwd);
+    if (r.text) parts.push({ label: src.label, diff: r.text });
+    truncated ||= r.truncated;
+  }
+  return { parts, truncated };
+}
+
 /** POST /api/team-docs: when the person approves a map feature (reconnaissance or map update), the project documentation as reviewed
  * in the app goes to docs/squad/projeto.json on that feature's branch, so it reaches the base with the map and other developers import
  * it (teamMapInfo) instead of running their own reconnaissance. Committed only when it changed. */
@@ -923,7 +1010,7 @@ async function startRun(body) {
   runs.set(id, run);
   if (run.persist) try { store.insertRun(run); } catch (e) { run.persist = false; console.warn(`Histórico da execução ${id} não gravado: ${e.message}`); }
   // The attachments go to the folder the agent will run in, so they are written once it is ready (after a linked run's preparing).
-  const go = () => placeAttachments(run, opts).then(() => { if (run.cancelled) endRun(run); else launchRun(run, resolved, args, opts, prompt); }, e => endRun(run, { isError: true, error: e.message }));
+  const go = () => stepStart(run).then(() => placeAttachments(run, opts)).then(() => { if (run.cancelled) endRun(run); else launchRun(run, resolved, args, opts, prompt); }, e => endRun(run, { isError: true, error: e.message }));
   if (!prep) go();
   else prepareRun(run, opts, prep).then(ok => { if (ok && !run.cancelled) go(); else endRun(run); });
   return run;
@@ -1048,7 +1135,8 @@ function launchRun(run, resolved, args, opts, prompt) {
     if (buffer.trim()) { try { const evt = JSON.parse(buffer); if (evt.type === 'result') run.result = evt; pushEvent(run, evt); } catch { pushEvent(run, { type: 'raw', text: buffer.slice(0, 4000) }); } }
     const r = run.result || {}, end = () => endRun(run, { code, isError: code !== 0 || !!r.is_error, error: (r.is_error && r.result) || stderrTail.trim().slice(-1500) || `claude saiu com código ${code}` });
     // A successful step of a linked operation's feature is committed by the bridge before the run ends.
-    if (run.stepCommit && code === 0 && !r.is_error && !run.cancelled && !run.timedOut) commitStep(run).finally(end); else end();
+    const done = () => run.stepFrom === undefined ? end() : stepEnd(run).finally(end);
+    if (run.stepCommit && code === 0 && !r.is_error && !run.cancelled && !run.timedOut) commitStep(run).finally(done); else done();
   });
 
   child.stdin.on('error', () => {});
@@ -1067,7 +1155,7 @@ function endRun(run, { code = null, isError = false, error = '' } = {}) {
     type: 'exit', status: run.status, code, isError,
     result: typeof r.result === 'string' ? r.result : '',
     costUsd: r.total_cost_usd ?? r.cost_usd ?? null, durationMs: r.duration_ms ?? null,
-    numTurns: r.num_turns ?? null, sessionId: r.session_id ?? null,
+    numTurns: r.num_turns ?? null, sessionId: r.session_id ?? null, range: run.stepRange || null,
     error: isError ? (run.cancelled ? 'Execução cancelada pelo operador.' : run.timedOut ? 'Tempo limite excedido.' : error || `claude saiu com código ${code}`) : null,
   };
   pushEvent(run, exit);
@@ -1372,6 +1460,25 @@ async function handle(req, res) {
       try { await gitRun(['push', '-q', origin, `refs/heads/${body.branch}:refs/heads/${body.branch}`], dir, 180000, null, { SQUAD_BRIDGE_PUSH: '1' }); }
       catch (e) { return fail(res, 502, `git push falhou: ${e.message}`); }
       return json(res, 200, { ok: true, branch: body.branch, pr: prUrl(origin, repo.baseBranch, body.branch), local: !REPO_URL_RE.test(origin) });
+    }
+    // Files a feature changed, before or after its approval: GET /api/changes/<folder>?repo=<id>&feature=<slug> (linked) or
+    // ?ranges=<from>..<to>,... and/or ?key=<F01>&since=<seconds>&until=<seconds> (new project); &file=<path> answers that file's diff.
+    if (parts[1] === 'changes' && req.method === 'GET' && parts.length === 3) {
+      const q = url.searchParams, root = projectDir(parts[2]), repoId = q.get('repo'), slug = q.get('feature') || '', key = q.get('key') || '';
+      const repo = repoId ? loadRepos().repos.find(r => r.id === repoId) : null;
+      if (repoId && !repo) return fail(res, 400, 'Repositório não cadastrado.');
+      const ranges = (q.get('ranges') || '').split(',').filter(Boolean).slice(0, 400);
+      if (ranges.some(x => !RANGE_RE.test(x))) return fail(res, 400, 'Intervalo de commits inválido.');
+      if (repo ? !FOLDER_RE.test(slug) : key ? !/^[\w.-]{1,40}$/.test(key) : !q.has('ranges')) return fail(res, 400, 'Identificador de feature inválido.');
+      if (!fs.existsSync(path.join(root, '.git'))) return json(res, 200, { ok: true, exists: false, files: [], total: 0 });
+      const scope = await changeSources(longPath(root), repo, slug, { key, since: Number(q.get('since')) || 0, until: Number(q.get('until')) || Infinity, ranges }), files = await changeList(scope);
+      if (q.has('file')) {
+        const file = files.find(f => f.path === q.get('file'));
+        if (!file) return fail(res, 404, 'Este arquivo não está entre as mudanças da feature.');
+        return json(res, 200, { ok: true, file, ...await changeDiff(scope, file) });
+      }
+      const { exists, dir, branch, base, commits, missing } = scope;
+      return json(res, 200, { ok: true, exists, dir: dir || null, branch, base, commits, missing, files: files.slice(0, CHANGES_MAX), total: files.length });
     }
     // Approved feature of a linked operation: DELETE /api/worktrees/<project folder>/<feature>.
     if (parts[1] === 'worktrees' && req.method === 'DELETE' && parts.length === 4) {
