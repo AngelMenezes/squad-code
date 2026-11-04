@@ -429,6 +429,10 @@ that repository, then `PUT /api/repos/:id` with the new `baseBranch`, so it appl
   OpenAPI, HAR, curl blocks, else the beginning) goes to the commander's plan and the co-writing chat (`attachPromptBlock`), which have
   no tools; `executeLiveStep` sends the ids as `attachments`. `feAttachCheck` marks the ones this database lacks (another computer, a
   restored version) as unavailable. No backup, export or demo support on purpose.
+- Review desk: a feature running, in review or done opens in a wide modal (`openOpsFeature` → `openReviewDesk`, kind `review`, size `review-desk`): criteria and deliveries
+  scroll apart (`.rv-scroll`; tabs under 900px), newest delivery first and the last step open, the decision fixed in the footer. `reviewSync` (from `render()`) patches it when
+  `reviewSig` changes, keeping scroll and open items. **Solicitar ajustes** requires the reason (`#reviewReworkForm` → `approveFeature(id,false,text)`; closing keeps a draft in the transient
+  `ui.reviewNotes`): `f.reworks` `[{at,text}]` (persisted, normalized, newest 10) goes to `buildStepPrompt` and the commander's plan.
 - Features carry `route` (ordered agent ids) built by `routeFor`, which maps scopes to roles with
   `ROLE_FAMILY` (e.g. node/java/dotnet cover the backend step). A finished route sends the feature to
   human review; only approval marks it done and unblocks dependents.

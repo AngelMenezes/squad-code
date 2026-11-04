@@ -199,7 +199,12 @@ with sync_playwright() as pw:
     test('Human approval marks only the reviewed feature complete',feat(page,pid,f1)['status']=='done' and feat(page,pid,f2)['status']=='review')
     test('An approved dependency unlocks the dependent feature',page.evaluate(f"depsReady(featureById('{f3}'))"))
     page.evaluate(f"openFeature('{f2}')");act(page,'feature-rework')
+    page.locator('#reviewReworkForm button[type=submit]').click()
+    test('A rework without a reason is refused',feat(page,pid,f2)['status']=='review' and page.locator('#reviewNote').is_visible())
+    page.locator('#reviewNote').fill('Falta validar o formato do telefone.');page.locator('#reviewReworkForm button[type=submit]').click()
     test('Review can request another iteration',feat(page,pid,f2)['status']=='ready')
+    test('The rework request is kept and reaches the next step prompt',page.evaluate(f"(()=>{{const f=featureById('{f2}');return f.reworks.at(-1).text==='Falta validar o formato do telefone.'&&buildStepPrompt(f,agentById(f.route[0]),project()).includes('Falta validar o formato do telefone.')}})()"))
+    test('The rework request survives normalization',page.evaluate(f"normalizeWorkspace(JSON.parse(JSON.stringify(state))).projects.flatMap(p=>p.features).find(f=>f.id==='{f2}').reworks.length")==1)
     close(page)
 
     # Individual spawn skips the commander.
