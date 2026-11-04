@@ -247,7 +247,7 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   talk is `runAgentChat` (bridge, no tools). Conversations are kept in `ui.featureChats`/`ui.agentChats`/`ui.docChats` (filled at boot
   from `#squad-memory.chats`): `chatStash` (the Stop functions) stores `chatSnapshot(c)` there, and with the bridge `chatPersist`
   (hooked in `chatPush`/`chatSettle`/`chatFooter`, 800 ms) and `chatFlush` (beacon on `pagehide`) save it to the database.
-  Every chat turn runs with `CHAT_RUN` over `runOptionsFor` (`tools:[]`, `permissionMode:'dontAsk'`, `partial:true`); never
+  Every chat turn runs with `CHAT_RUN` over `runOptionsFor` (`tools:[]`, `permissionMode:'dontAsk'`, `partial:true`, 180 s; Agent Teams turns get 300 s, since the architect's documents take longer); never
   `plan` (its planning flow made replies slow and the model wrote fake tool calls). `claude -p` never offers AskUserQuestion, so
   an agent asks with `"ask":{question,options}` in the reply's ```json block (`COWRITE_SYSTEM`/`AGENT_CHAT_SYSTEM`): `chatAsk`
   turns it into `id:'ask'` buttons (`agentChatChoose` sends the pick back as the person's message; typing also answers).
