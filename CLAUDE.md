@@ -433,6 +433,9 @@ that repository, then `PUT /api/repos/:id` with the new `baseBranch`, so it appl
   scroll apart (`.rv-scroll`; tabs under 900px), newest delivery first and the last step open, the decision fixed in the footer. `reviewSync` (from `render()`) patches it when
   `reviewSig` changes, keeping scroll and open items. **Solicitar ajustes** requires the reason (`#reviewReworkForm` → `approveFeature(id,false,text)`; closing keeps a draft in the transient
   `ui.reviewNotes`): `f.reworks` `[{at,text}]` (persisted, normalized, newest 10) goes to `buildStepPrompt` and the commander's plan.
+- Writing tools: a called colleague never gets a tool its caller's session lacks. `agentCanWrite` (Write, Edit or Bash, or `restrictTools` off) drives the plan card's warning (`roomPlanHTML`, not on map features)
+  and a section of `buildStepPrompt` sent only to an agent that cannot write; the commander's prompt states the rule. A call refused with "No such tool available" does not fail the step: `toolGapsAdd`/`toolGapNote` report it in the
+  console and the room, and `output.missingTools` (persisted, normalized) marks the delivery in the review desk.
 - Features carry `route` (ordered agent ids) built by `routeFor`, which maps scopes to roles with
   `ROLE_FAMILY` (e.g. node/java/dotnet cover the backend step). A finished route sends the feature to
   human review; only approval marks it done and unblocks dependents.

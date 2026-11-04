@@ -206,6 +206,28 @@ with sync_playwright() as pw:
     test('The rework request is kept and reaches the next step prompt',page.evaluate(f"(()=>{{const f=featureById('{f2}');return f.reworks.at(-1).text==='Falta validar o formato do telefone.'&&buildStepPrompt(f,agentById(f.route[0]),project()).includes('Falta validar o formato do telefone.')}})()"))
     test('The rework request survives normalization',page.evaluate(f"normalizeWorkspace(JSON.parse(JSON.stringify(state))).projects.flatMap(p=>p.features).find(f=>f.id==='{f2}').reworks.length")==1)
     close(page)
+    gaps=page.evaluate(f"""(()=>{{
+      const p=project(),f=featureById('{f2}'),a=agentById(f.route[0]),tools=a.tools,err=name=>({{type:'user',parent_tool_use_id:'x',message:{{content:[{{type:'tool_result',tool_use_id:'t',is_error:true,content:`<tool_use_error>Error: No such tool available: ${{name}}. ${{name}} is disabled for this session, in subagents as well as here.</tool_use_error>`}}]}}}});
+      const c=newConsole({{runId:'gap',agentId:a.id,featureId:f.id}});handleRunEvent(c,err('Write'));handleRunEvent(c,err('Write'));handleRunEvent(c,err('Edit'));handleRunEvent(c,{{type:'result',total_cost_usd:0}});
+      const ctx=roomCtx(a,f,{{}});roomEvent(ctx,err('Write'));roomEvent(ctx,{{type:'result'}});
+      const plain=newConsole({{runId:'plain',agentId:a.id,featureId:f.id}});handleRunEvent(plain,{{type:'user',message:{{content:[{{type:'tool_result',is_error:true,content:'Exit code 1'}}]}}}});handleRunEvent(plain,{{type:'result',total_cost_usd:0}});
+      const out={{console:c.lines.filter(l=>l.kind==='warn').map(l=>l.text).join(),room:roomOf(p).messages.at(-1).text,plain:plain.lines.filter(l=>l.kind==='warn').length}};
+      const plan=()=>roomPlanHTML({{id:'x',status:'awaiting',items:[{{featureId:f.id,route:[a.id],briefs:[''],missing:[]}}]}}).includes('pode gravar arquivos');
+      const noWrite='## Sua sessão não grava arquivos';
+      a.tools=['Read','Write'];out.planWriter=plan();out.stepWriter=buildStepPrompt(f,a,p).includes(noWrite);
+      a.tools=['Read','Glob'];out.planReader=plan();out.stepReader=buildStepPrompt(f,a,p).includes(noWrite);
+      a.tools=['Read','Bash'];out.planBash=plan();
+      a.tools=tools;out.commander=commanderPlanPrompt(p,{{label:'x'}},[]).includes('quem é chamado fica limitado');
+      f.outputs.push({{agentId:a.id,at:nowISO(),text:'x',simulated:false,error:false,costUsd:null,durationMs:null,sessionId:null,missingTools:['Write']}});
+      out.kept=normalizeWorkspace(JSON.parse(JSON.stringify(state))).projects.flatMap(x=>x.features).find(x=>x.id===f.id).outputs.at(-1).missingTools.join();f.outputs.pop();
+      return out;}})()""")
+    test('A missing tool is counted and reported in the console',"Write (2x), Edit (1x)" in gaps['console'])
+    test('A missing tool is reported in the room',"Write (1x)" in gaps['room'])
+    test('Other tool errors do not count as a missing tool',gaps['plain']==0)
+    test('The plan warns only for a route where nobody can write',gaps['planReader'] and not gaps['planWriter'] and not gaps['planBash'])
+    test('The step note goes only to an agent that cannot write',gaps['stepReader'] and not gaps['stepWriter'])
+    test('The commander is told that a called colleague gets no extra tools',gaps['commander'])
+    test('The missing tools of a delivery survive normalization',gaps['kept']=='Write')
 
     # Individual spawn skips the commander.
     view(page,'network');click(page,'ops-chat-close','#opsChat') # after a run the chat stays docked over the roster until closed

@@ -1779,6 +1779,8 @@ body:not(.reduce-motion) .at-tile.leaving,.at-tile.leaving{animation:at-leave .4
 .rv-output>summary .fe-chev{transform:rotate(-45deg)}
 .rv-output[open]>summary .fe-chev{transform:rotate(45deg) translateY(-2px)}
 .rv-output>.rv-md{padding:14px 16px 16px;overflow-wrap:anywhere}
+.rv-gap{color:#e0a84a;border-color:#e0a84a66}
+.rv-gap-note{margin:0 0 12px;padding:9px 12px;line-height:1.55}
 .rv-asks{margin-bottom:16px;padding:10px 12px;border-left:2px solid #e0a84a;background:#e0a84a0d}
 .rv-asks .eyebrow{color:#e0a84a;margin-bottom:6px}
 .rv-asks p{margin:0 0 8px;font-size:12px;line-height:1.55;color:#d8d2c2;white-space:pre-wrap;overflow-wrap:anywhere}
