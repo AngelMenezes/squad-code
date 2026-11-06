@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./index.html)",
+      "Read(./src/avatars.js)",
+      "Read(./src/portraits.js)",
+      "Read(./src/vendor/**)",
+      "Read(./assets/**)"
+    ]
+  }
+}
