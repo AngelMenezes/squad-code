@@ -106,6 +106,9 @@ test('project runs get their own folder under the projects root, without the app
   assert.equal(init.cwd, realpathSync.native(dir));
   assert.ok(init.settings.claudeMdExcludes.includes(realpathSync.native(path.join(ROOT, 'CLAUDE.md')).replace(/\\/g, '/')));
   assert.equal(init.settings.permissions.blockReadsOutsideWorkingDirectories, true);
+  // The person's MCP servers, skills and enabled plugins stay out of the run.
+  assert.ok(args.includes('--strict-mcp-config') && args.includes('--disable-slash-commands'));
+  assert.deepEqual(init.settings.enabledPlugins, { 'fake-plugin@synced': false });
   // The folder is its own repository and git stops at the projects root: the agents' git commands never reach the enclosing one.
   assert.ok(init.gitCeiling.split(path.delimiter).includes(realpathSync.native(projectsRoot)));
   if (git) {

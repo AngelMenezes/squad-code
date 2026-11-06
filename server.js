@@ -776,6 +776,28 @@ function toolchains(refresh = false) {
     .finally(() => { toolPending = null; });
   return toolPending;
 }
+
+/* The person's own Claude Code setup stays out of the squad's runs: MCP servers and claude.ai connectors (--strict-mcp-config without
+ * --mcp-config), skills and slash commands (--disable-slash-commands) and installed plugins, which bring their agents and hooks. Each
+ * costs context on every turn and none is meant for an agent. Plugins are turned off with enabledPlugins in the run's settings file,
+ * from `claude plugin list --json` (cached PLUGIN_TTL per executable; a CLI without it gives none), so the person's settings.json
+ * still applies. */
+const PLUGIN_TTL = 10 * 60 * 1000;
+const pluginCache = new Map();
+function userPlugins(resolved) {
+  const hit = pluginCache.get(resolved);
+  if (hit?.pending) return hit.pending;
+  if (hit && Date.now() - hit.at < PLUGIN_TTL) return Promise.resolve(hit.ids);
+  const pending = runVersion(resolved, ['plugin', 'list', '--json'], 20000).then(r => {
+    let list = [];
+    try { list = r.code === 0 ? JSON.parse(r.out.slice(r.out.indexOf('['))) : []; } catch {}
+    const ids = Array.isArray(list) ? list.filter(p => p && p.enabled !== false && typeof p.id === 'string' && /^[\w.@-]{1,200}$/.test(p.id)).map(p => p.id) : [];
+    pluginCache.set(resolved, { at: Date.now(), ids });
+    return ids;
+  });
+  pluginCache.set(resolved, { pending });
+  return pending;
+}
 function envNote(data) {
   const have = data.tools.filter(t => t.found), miss = data.tools.filter(t => !t.found);
   return `\n\n## Ferramentas instaladas nesta máquina\nO bridge verificou: ${have.map(t => `${t.name} ${t.versions?.length > 1 ? t.versions.join(', ') : t.version}`).join('; ') || 'nenhuma das ferramentas conhecidas'}.${miss.length ? ` Não encontradas: ${miss.map(t => t.name).join(', ')}.` : ''}\nAo fixar versões (SDK, runtime, global.json, engines, go.mod, pubspec, imagens...), use as que existem aqui. Se a solução pedir uma ferramenta não encontrada, não finja que ela existe: escreva o código mesmo assim e registre no relatório o que a pessoa precisa instalar, com o link oficial e o comando de verificação. O README do projeto deve listar os pré-requisitos com as versões usadas.`;
@@ -963,7 +985,7 @@ async function startRun(body) {
 
   const envText = opts.withEnv ? envNote(await toolchains()) : '';
   const id = crypto.randomUUID();
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-prompts', 'none'];
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-prompts', 'none', '--strict-mcp-config', '--disable-slash-commands'];
   let sysFile = null, settingsFile = null, agentsFile = null;
   // OS temp cleanup can remove the (usually empty) folder while the bridge keeps running.
   if (systemPrompt.trim() || opts.projectRun || opts.agents) await fsp.mkdir(TMP_DIR, { recursive: true });
@@ -978,7 +1000,8 @@ async function startRun(body) {
     // person's other folders for the project.
     // In a worktree, the clone above it would add its own (base branch) CLAUDE.md files to the worktree's.
     const excludes = prep?.feature ? [...APP_MEMORY_EXCLUDES, ...MEMORY_FILES.map(f => `${prep.root.replace(/\\/g, '/')}/${f}`)] : APP_MEMORY_EXCLUDES;
-    await fsp.writeFile(settingsFile, JSON.stringify({ claudeMdExcludes: excludes, permissions: { blockReadsOutsideWorkingDirectories: true } }), 'utf8');
+    const plugins = await userPlugins(resolved);
+    await fsp.writeFile(settingsFile, JSON.stringify({ claudeMdExcludes: excludes, permissions: { blockReadsOutsideWorkingDirectories: true }, ...(plugins.length ? { enabledPlugins: Object.fromEntries(plugins.map(p => [p, false])) } : {}) }), 'utf8');
     args.push('--settings', settingsFile);
   }
   if (opts.agents) {
@@ -1620,7 +1643,7 @@ server.listen(PORT, HOST, () => {
   if (store?.interrupted) console.log(`${store.interrupted} execução(ões) interrompida(s) na última sessão marcada(s) no histórico.`);
   if (process.env.SQUAD_PRINT_TOKEN) console.log(`TOKEN=${TOKEN}`);
   claudeVersion(DEFAULT_BIN).then(info => {
-    if (info.version) console.log(`Claude Code ${info.version} (${info.resolved})`);
+    if (info.version) { console.log(`Claude Code ${info.version} (${info.resolved})`); userPlugins(info.resolved).catch(() => {}); }
     else console.warn(`Claude Code não encontrado (${DEFAULT_BIN}): ${info.error}\n  Instale o Claude Code, rode "claude" uma vez para fazer login e reinicie, ou aponte SQUAD_CLAUDE_BIN para o executável.\n  Sem ele o app abre, mas as execuções ficam só na simulação.`);
   }, () => {});
 });

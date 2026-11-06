@@ -55,7 +55,9 @@ order**, into one classic `<script>`: `portraits.js`, `avatars.js`, `conventions
 
 **`server.js` (bridge) + `db.js` (SQLite).** Serves `index.html` (injecting a per-start random token), binds to
 127.0.0.1 only, and every `/api` call needs the token plus local Host/Origin. `/api/runs` spawns
-`claude -p --output-format stream-json --verbose --permission-prompts none`, writes the agent's system
+`claude -p --output-format stream-json --verbose --permission-prompts none --strict-mcp-config --disable-slash-commands` (the person's
+MCP servers, claude.ai connectors and skills stay out; project runs also get `enabledPlugins: {<id>: false}` in their `--settings`
+file from `userPlugins`, `claude plugin list --json` cached `PLUGIN_TTL`, warmed at start), writes the agent's system
 prompt to a temp file passed as `--append-system-prompt-file`, sends the step prompt via **stdin**
 (never shell-interpolated), and streams events back. Options (permission mode, effort, tools, model,
 dirs, budget, `partial` → `--include-partial-messages`) are whitelisted. Limits: body 2 MB, prompt 400k chars, system prompt 100k (silently

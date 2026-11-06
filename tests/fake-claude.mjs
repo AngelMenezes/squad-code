@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 if (args.includes('--version')) { console.log('9.9.9 (Fake Claude)'); process.exit(0); }
+if (args[0] === 'plugin') { console.log(JSON.stringify([{ id: 'fake-plugin@synced', enabled: true }, { id: 'off-plugin@synced', enabled: false }])); process.exit(0); }
 
 const opt = name => { const i = args.indexOf(name); return i > -1 ? args[i + 1] : null; };
 let input = '';
