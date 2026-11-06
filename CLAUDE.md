@@ -279,7 +279,9 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   pick and leaves. Leftover guests leave at the end of the round, and all of them on close (`docChatStop`; `closeModal` then plays the CRT power-off on an inert ghost of the overlay, `teamsPowerOff`, none with reduced motion); `c.hosts` keeps the
   three fixed participants. The `@` list has a "Convidar" group; the gallery grows to 3/4 columns (`data-n`, `--n`). Each turn is its own `claude -p` (own instructions,
   SOUL, model, effort) and sees the round so far ("Nesta rodada") and the agenda ("## Pauta", `teamsAgenda`, same rule as
-  `projectGaps`); `docCoWriteSystem` tells each agent to write only its fields. Screen: top bar (clock `teamsTick`, from `ui.teamsT0`, so it restarts on every open, agenda chips,
+  `projectGaps`); `docCoWriteSystem` tells each agent to write only its fields. A host's system prompt must be the same on
+every turn of the meeting (built from `c.hosts` only; the round, the guests and who is outside go in `docCoWritePrompt`): any change
+in it makes the next turn write the whole system prompt to the prompt cache again. Screen: top bar (clock `teamsTick`, from `ui.teamsT0`, so it restarts on every open, agenda chips,
   tabs Chat/Documentos, save, Sair), stage with one tile per agent plus Você (`data-state` from `c.speakerId` + `c.phase`:
   thinking → speaking (first streamed words, `chatStream` `onFirst`) → sharing; every tile has a CRT overlay in its
   `:before`/`:after`, under the labels, all cameras in sync (no per-tile delay and no state may swap those animations), and
