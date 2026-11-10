@@ -814,6 +814,8 @@ function activeCount() { return [...runs.values()].filter(r => r.status === 'run
 
 function pushEvent(run, event) {
   event = leanEvent(event);
+  // n: the event's number in its run, so a page that lost the stream reconnects with ?after=n and gets only what it missed.
+  event.n = run.n = (run.n || 0) + 1;
   run.events.push(event);
   if (run.events.length > MAX_EVENTS) run.events.splice(0, run.events.length - MAX_EVENTS);
   const line = `data: ${JSON.stringify(event)}\n\n`;
@@ -931,7 +933,7 @@ function validateRunOptions(o = {}) {
     if (o.attachments.length > 20 || !o.attachments.every(id => typeof id === 'string' && /^at[0-9a-f]{16}$/.test(id))) throw new Error('Anexos inválidos.');
     out.attachments = [...new Set(o.attachments)];
   } else out.attachments = null;
-  const timeout = Number(o.timeoutSec); out.timeoutSec = Number.isFinite(timeout) && timeout >= 10 && timeout <= 7200 ? timeout : 900;
+  const timeout = Number(o.timeoutSec); out.timeoutSec = Number.isFinite(timeout) && timeout >= 10 && timeout <= 7200 ? timeout : 2400;
   return out;
 }
 
@@ -1521,7 +1523,7 @@ async function handle(req, res) {
       return json(res, 201, { ok: true, runId: run.id, args: run.args, cwd: run.cwd });
     }
     if (parts[1] === 'runs' && parts[2]) {
-      const run = runs.get(parts[2]);
+      const run = runs.get(parts[2]), after = Number(url.searchParams.get('after')) || 0, missed = evt => !(evt.n <= after);
       if (!run) {
         // Older runs (and those from before a restart) are replayed from the history.
         const saved = store?.getRun(parts[2]);
@@ -1529,7 +1531,7 @@ async function handle(req, res) {
         if (req.method === 'GET' && parts[3] === 'events') {
           res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' });
           res.write(': connected\n\n');
-          for (const evt of store.runEvents(parts[2])) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+          for (const evt of store.runEvents(parts[2]).filter(missed)) res.write(`data: ${JSON.stringify(evt)}\n\n`);
           return res.end();
         }
         if (req.method === 'POST' && parts[3] === 'cancel') return json(res, 200, { ok: true, status: saved.run.status });
@@ -1539,7 +1541,7 @@ async function handle(req, res) {
       if (req.method === 'GET' && parts[3] === 'events') {
         res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write(': connected\n\n');
-        for (const evt of run.events) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+        for (const evt of run.events.filter(missed)) res.write(`data: ${JSON.stringify(evt)}\n\n`);
         if (run.status !== 'running') return res.end();
         run.clients.add(res);
         const ping = setInterval(() => res.write(': ping\n\n'), 20000);

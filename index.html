@@ -10925,7 +10925,7 @@ const STORE='squad-code.network.v2';
 // opSeq: highest operation number ever given (OP-<n>), so a deleted operation's code is never reused (nextOpCode).
 // mapQuality: graphics of the hex city ('high': shadows, ambient occlusion and bloom; 'low': plain render).
 const DEFAULT_SETTINGS={motion:true,stepMs:1800,squadView:'city',cityShape:'flat',mapQuality:'high',catalogVersion:2,teamsChat:0,opsChat:0,opSeq:0,runtime:{...DEFAULT_RUNTIME}};
-function normalizeRuntime(r={}){const str=(v,max)=>typeof v==='string'?v.slice(0,max).trim():'';const n=Number(r.timeoutSec),c=Number(r.concurrency),b=Number(r.maxBudgetUsd);return{mode:r.mode==='demo'?'demo':'claude',claudePath:str(r.claudePath,400),permissionMode:Object.hasOwn(PERMISSION_MODES,r.permissionMode)?r.permissionMode:'acceptEdits',model:/^[A-Za-z0-9._\-\[\]]{0,80}$/.test(r.model||'')?(r.model||''):'',effort:EFFORTS.includes(r.effort)?r.effort:'',maxBudgetUsd:Number.isFinite(b)&&b>0&&b<=1000?String(b):'',timeoutSec:Number.isFinite(n)&&n>=10&&n<=7200?Math.round(n):900,concurrency:Number.isInteger(c)&&c>=1&&c<=8?c:2,addDirs:str(r.addDirs,2000),restrictTools:r.restrictTools!==false,extraAllowedTools:str(r.extraAllowedTools,2000)};}
+function normalizeRuntime(r={}){const str=(v,max)=>typeof v==='string'?v.slice(0,max).trim():'';const n=Number(r.timeoutSec),c=Number(r.concurrency),b=Number(r.maxBudgetUsd);return{mode:r.mode==='demo'?'demo':'claude',claudePath:str(r.claudePath,400),permissionMode:Object.hasOwn(PERMISSION_MODES,r.permissionMode)?r.permissionMode:'acceptEdits',model:/^[A-Za-z0-9._\-\[\]]{0,80}$/.test(r.model||'')?(r.model||''):'',effort:EFFORTS.includes(r.effort)?r.effort:'',maxBudgetUsd:Number.isFinite(b)&&b>0&&b<=1000?String(b):'',timeoutSec:Number.isFinite(n)&&n>=10&&n<=7200?Math.round(n):2400,concurrency:Number.isInteger(c)&&c>=1&&c<=8?c:2,addDirs:str(r.addDirs,2000),restrictTools:r.restrictTools!==false,extraAllowedTools:str(r.extraAllowedTools,2000)};}
 const AGENT_STAGES={discovery:{label:'Descoberta',short:'IDEIA'},identity:{label:'Identidade',short:'IDENTIDADE'},prompt:{label:'Prompt & Tools',short:'PROMPT'},validation:{label:'Validação',short:'VALIDAÇÃO'},ready:{label:'Pronto',short:'PRONTO'}};
 const STAGE_ORDER=['discovery','identity','prompt','validation','ready'];
 function createFeature(title,index,extra={}){return{id:id('feature'),key:'F'+pad(index),title,description:'',criteria:'Critérios de aceitação definidos no briefing.',scope:'fullstack',priority:'P1',status:'backlog',dependencies:[],route:[],currentAgentId:null,step:0,outputs:[],context:'',tasks:'',sprintId:'',briefs:[],setup:false,mapUpdate:false,merge:null,attachments:[],...extra};}
@@ -13007,16 +13007,28 @@ function renderIndicator(){
  el.title=live?`Claude Code ${b.version} em ${b.path}. Clique para configurar.`:(b.error||'Clique para configurar o Claude Code');
 }
 /** Reads a text/event-stream through fetch (keeps the token in a header) and resolves on the exit event. */
+// The stream of a run. A dropped connection ("network error", the PC sleeping) does not end the run on the bridge: the page reconnects
+// with ?after=<last event number> (the bridge replays only what it missed) for about a minute and a half before giving up.
+const STREAM_RETRY=[1,2,3,5,8,13,20,30];
 async function streamRun(runId,onEvent){
- const res=await fetch(`/api/runs/${encodeURIComponent(runId)}/events`,{headers:{'x-squad-token':BRIDGE_TOKEN}});
- if(!res.ok||!res.body)throw Error('Não foi possível acompanhar a execução.');
- const reader=res.body.getReader(),decoder=new TextDecoder();let buffer='',exit=null;
+ let after=0,exit=null,tries=0,why='';
  for(;;){
-  const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});
-  let cut;while((cut=buffer.indexOf('\n\n'))>=0){const chunk=buffer.slice(0,cut);buffer=buffer.slice(cut+2);const data=chunk.split('\n').filter(l=>l.startsWith('data: ')).map(l=>l.slice(6)).join('\n');if(!data)continue;let evt;try{evt=JSON.parse(data);}catch{continue;}onEvent(evt);if(evt.type==='exit')exit=evt;}
+  let res=null,got=false;
+  try{res=await fetch(`/api/runs/${encodeURIComponent(runId)}/events${after?`?after=${after}`:''}`,{headers:{'x-squad-token':BRIDGE_TOKEN}});}catch(e){why=e.message;}
+  if(res&&(!res.ok||!res.body))throw Error(res.status===404?'Execução não encontrada no bridge.':'Não foi possível acompanhar a execução.');
+  if(res)try{
+   const reader=res.body.getReader(),decoder=new TextDecoder();let buffer='';
+   for(;;){
+    const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});
+    let cut;while((cut=buffer.indexOf('\n\n'))>=0){const chunk=buffer.slice(0,cut);buffer=buffer.slice(cut+2);const data=chunk.split('\n').filter(l=>l.startsWith('data: ')).map(l=>l.slice(6)).join('\n');if(!data)continue;let evt;try{evt=JSON.parse(data);}catch{continue;}if(evt.n<=after)continue;if(evt.n)after=evt.n;got=true;onEvent(evt);if(evt.type==='exit')exit=evt;}
+   }
+   why='conexão encerrada pelo bridge';
+  }catch(e){why=e.message;}
+  if(exit)return exit;
+  if(got)tries=0;
+  if(tries>=STREAM_RETRY.length)throw Error(`Conexão com o bridge perdida durante a execução (${why}). A execução pode ter continuado no bridge: confira o histórico de execuções antes de rodar de novo.`);
+  await new Promise(r=>setTimeout(r,STREAM_RETRY[tries++]*1000));
  }
- if(!exit)throw Error('Conexão com o bridge encerrada antes do fim da execução.');
- return exit;
 }
 const splitList=v=>String(v||'').split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
 function runOptionsFor(a,r=runtime(),p=project()){
@@ -13082,6 +13094,7 @@ function buildStepPrompt(f,a,p){
   previous?`## Entregas anteriores nesta rota\n${previous}`:'',
   f.reworks?.length?`## Ajustes pedidos na revisão humana\nA pessoa revisou a entrega desta feature e a devolveu pedindo o que está abaixo (o último pedido é o mais recente). O que já foi feito continua nesta pasta: parta disso, resolva o que for da sua parte e não refaça o resto.\n${f.reworks.map(r=>`- ${clip(r.text,4000).replace(/\n/g,'\n  ')}`).join('\n')}`:'',
   brief?`## Instrução do comandante para você\n${brief}`:'',
+  resumeNote(f),
   isRecon(f,p)?`## Reconhecimento do repositório existente\nA pasta desta operação é um clone do repositório existente do projeto. Nesta feature você só documenta: não altere código de produção e não faça git push (os envios ficam com a pessoa).\n- Você pode escrever só em docs/squad. O bridge grava docs/squad/.reconhecimento (commit da branch base e data) e faz o commit ao fim da sua etapa: você não precisa de git nem de shell, e não deve pedir isso a colegas.\n- Comandos (docs/squad/comandos.md): tire-os dos arquivos do projeto (manifestos e arquivos de build, scripts, Makefile, README, pipelines de CI). Marque um comando como verificado só se você mesmo o rodou com Bash; sem Bash, marque como não verificado. Rode cada comando a partir da raiz desta pasta, apontando o caminho (ex.: dotnet test src/X.sln), um comando por vez, sem cd. Isso não é bloqueio da F00 nem motivo para reprovar a revisão.\n- Se docs/squad já existir, leia-o primeiro e atualize só o que mudou; a lista do que mudou desde o mapa vem no fim deste prompt, quando houver.\n- Para mapear, leia a estrutura de pastas, os manifestos (package.json, pom.xml, go.mod...), o README, a configuração e os pontos de entrada. Não leia o código arquivo por arquivo.\nSe a sua etapa conhece o produto ou a arquitetura, termine a resposta com um bloco \`\`\`json {"docs":{"vision":"","scopeIn":"","scopeOut":"","glossary":"","architecture":"","adrs":[{"title":"","content":""}]}} com o que o código e a documentação mostram: listas com um item por linha, ADRs para as decisões já tomadas (stack, banco, integrações). Deixe vazio o que não souber: o app preenche só os campos do projeto que ainda estão vazios.`
    :f.mapUpdate&&p.repoId?`## Atualização do mapa do repositório\nO docs/squad descreve um commit antigo da branch base. A lista do que mudou desde então, fora de docs/squad, vem no fim deste prompt, calculada pelo bridge com o git. Não varra o repositório: leia o mapa atual e, da lista, só os arquivos que afetam alguma seção dele.\n- Reescreva só as seções afetadas de docs/squad (mapa, arquitetura, convenções, comandos); o resto fica como está.\n- Você pode escrever só em docs/squad. O bridge grava o novo commit de referência em docs/squad/.reconhecimento e faz o commit ao fim da etapa: você não precisa de git nem de shell.\n- Não altere código de produção.`
    :p.repoId&&directMode(p)&&!setupOf(p)?`## Repositório existente, sem reconhecimento\nEste projeto já existia antes da squad, e esta operação trabalha direto no código, sem um mapa feito pela squad. Leia só o necessário para a sua tarefa: o README, os manifestos e os arquivos que a feature e a instrução do comandante citam (se houver docs/squad, comece por ele). Não varra o repositório. O bridge faz o commit das suas mudanças na branch desta feature ao fim da etapa; não faça git push.`
@@ -13411,13 +13424,19 @@ function roomMetaHTML(m,who,extra=''){const a=agentById(who);return`<div class="
 function roomClip(t,n){t=String(t||'');return t.length>n?t.slice(0,n)+'…':t;}
 function roomMsgHTML(m){
  if(m.kind==='system')return`<div class="room-row system" data-rid="${m.id}"><p class="room-note ${m.tone||''}">${E(m.text)}</p></div>`;
- if(m.kind==='say'){const a=agentById(m.agentId),acts=m.activity||[],shown=acts.slice(-6);return`<div class="room-row say${m.thread?' thread':''}${m.human?' human':''}${a?.role==='commander'?' cmd':''}${m.error?' error':''}" data-rid="${m.id}">${m.human?'<span class="room-face human">VOCÊ</span>':roomFace(m.agentId)}<div class="room-msg">${roomMetaHTML(m,m.agentId)}${m.text?`<div class="room-bubble">${renderMarkdown(m.text)}</div>`:''}${acts.length?`<ul class="room-acts">${acts.length>shown.length?`<li class="more">+${acts.length-shown.length} ações antes</li>`:''}${shown.map(x=>`<li class="${x.error?'error':''}">${icon(x.icon)}<span>${E(x.text)}</span></li>`).join('')}</ul>`:''}</div></div>`;}
+ if(m.kind==='say'){const a=agentById(m.agentId),acts=m.activity||[],shown=acts.slice(-6);return`<div class="room-row say${m.thread?' thread':''}${m.human?' human':''}${a?.role==='commander'?' cmd':''}${m.error?' error':''}" data-rid="${m.id}">${m.human?'<span class="room-face human">VOCÊ</span>':roomFace(m.agentId)}<div class="room-msg">${roomMetaHTML(m,m.agentId)}${m.text?`<div class="room-bubble">${renderMarkdown(m.text)}</div>`:''}${m.error?roomResumeHTML(m):''}${acts.length?`<ul class="room-acts">${acts.length>shown.length?`<li class="more">+${acts.length-shown.length} ações antes</li>`:''}${shown.map(x=>`<li class="${x.error?'error':''}">${icon(x.icon)}<span>${E(x.text)}</span></li>`).join('')}</ul>`:''}</div></div>`;}
  if(m.kind==='call'){const to=m.to?roomAgentName(m.to):(m.toLabel||'SUBAGENTE').toUpperCase(),state=m.status==='open'?'aguardando resposta':m.status==='cancelled'?'encerrada com a operação':m.status==='error'?'a chamada falhou':m.status==='async'?'segue em segundo plano':'respondeu';
   return`<div class="room-row call ${m.status}" data-rid="${m.id}"><div class="room-call"><div class="room-call-faces">${roomFace(m.from)}<span class="room-call-line"><i></i></span>${roomFace(m.to||'sub:'+to)}</div><div class="room-msg">${roomMetaHTML(m,m.from,`<span>chamou</span><strong>${E(to)}</strong>`)}${m.text?`<p class="room-call-ask">${E(roomClip(m.text,900))}</p>`:''}${m.answer?`<div class="room-call-answer"><b>${E(to)} ${state}</b>${renderMarkdown(roomClip(m.answer,1600))}</div>`:`<span class="room-call-state ${m.status}">${state}</span>`}</div></div></div>`;}
  if(m.kind==='baton'){const to=m.to?roomAgentName(m.to):'VOCÊ';return`<div class="room-row baton" data-rid="${m.id}"><div class="room-baton"><div class="room-baton-track">${roomFace(m.from)}<span class="room-baton-run"><i></i></span>${m.to?roomFace(m.to):'<span class="room-face human">VOCÊ</span>'}</div><div class="room-msg">${roomMetaHTML(m,m.from,`<span>passou o bastão para</span><strong>${E(to)}</strong>${m.to?'':'<span>para revisão</span>'}`)}${m.text?`<details class="room-delivery"><summary>Entrega${m.simulated?' simulada':''}</summary><div class="room-md">${renderMarkdown(roomClip(m.text,8000))}</div></details>`:''}</div></div></div>`;}
  if(m.kind==='plan')return roomPlanHTML(m);
  if(m.kind==='review'){const f=featureById(m.featureId);return`<div class="room-row review" data-rid="${m.id}"><div class="room-card room-review">${icon('check')}<span><b>${E(m.featureKey)}</b> ${E(f?.title||'')} ${f?.status==='review'?'aguarda a sua revisão.':'saiu da revisão.'}</span>${f?.status==='review'?`<button class="btn sm primary" data-action="feature-open" data-id="${E(f.id)}">Revisar</button>`:f?`<em>${E(STATUS[f.status]||'')}</em>`:''}</div></div>`;}
  return'';
+}
+// Retomar on the latest failure message of a feature that can still resume at that agent's step (resumePoint).
+function roomResumeHTML(m){
+ const p=project(),f=p.features.find(x=>x.key===m.featureKey),pt=resumePoint(f,p);if(!pt||pt.agentId!==m.agentId||runner)return'';
+ if(roomOf(p).messages.findLast(x=>x.kind==='say'&&x.error&&x.featureKey===m.featureKey)!==m)return'';
+ return`<div class="room-card-actions"><button class="btn primary sm" data-action="feature-resume" data-id="${E(f.id)}" title="Recomeça desta etapa com a mesma rota, sem novo plano do comandante">${icon('play')}Retomar com ${E(agentById(pt.agentId)?.name||'o agente')}</button></div>`;
 }
 function roomPlanHTML(m){
  const src={commander:'MONTADO PELO COMANDANTE',demo:'MONTADO NA DEMONSTRAÇÃO',default:'DISTRIBUIÇÃO PADRÃO DA SQUAD'}[m.source]||'';
@@ -13722,6 +13741,39 @@ function startFeatureRun(f){
 function beginRun(r,what){runner=r;r.roomSeq=roomOf().seq;if(liveMode()){log(`${what} com Claude Code ${ui.bridge.version} (claude -p).`,'system');project().logs.at(-1).simulated=false;}else log(`${what} em modo demonstracao. Nenhum processo Claude foi criado.`,'system');closeModal();}
 function pendingDeps(f,p=project()){return f.dependencies.map(id=>p.features.find(x=>x.id===id)).filter(d=>d&&!featureLanded(d,p));}
 function blockedWhy(f,p=project()){const deps=pendingDeps(f,p);return deps.length?`${f.key} aguarda ${deps.map(d=>d.status==='done'?`o merge de ${d.key} (${d.merge.branch})`:`${d.key} (${sprintOf(d,p)?.name||'sem sprint'})`).join(', ')}.`:`${f.key} está bloqueada.`;}
+/* Retomar: a feature whose last step failed (timeout, network, Claude error) restarts at that step with the same route, the
+   commander's instructions and the earlier deliveries of the route (f.runStart is kept), without a new plan. The step is the number
+   of deliveries since runStart; it only counts when the route still has the failed agent there. The work the failed attempt left in the
+   folder (no commit) stays, and buildStepPrompt tells the agent so (runner.resume). Live: refused while that feature still has a run
+   going on the bridge (GET /api/runs), which the person can cancel first. */
+function resumePoint(f,p=project()){
+ if(!f||f.status!=='ready'||!f.route?.length||f.runStart==null)return null;const last=f.outputs.at(-1);if(!last?.error)return null;
+ const step=f.outputs.slice(f.runStart).filter(o=>!o.error).length;if(step>=f.route.length||f.route[step]!==last.agentId||!f.route.every(id=>p.agentIds.includes(id)&&agentById(id)))return null;
+ return{step,agentId:last.agentId,error:String(last.text||'').replace(/^\[FALHA\]\s*/,'').slice(0,600)};
+}
+async function resumeFeature(featureId){
+ const p=project(),f=featureById(featureId);if(!guardMutation())return;
+ if(runner)return toast('Já existe uma execução em andamento. Espere ela terminar.','error');
+ const pt=resumePoint(f,p);if(!pt)return toast('Esta feature não tem uma etapa interrompida para retomar. Rode a feature para o comandante planejar de novo.','error');
+ if(!runGate(p,f))return;refreshBlocked();if(!depsReady(f))return toast(blockedWhy(f),'error');
+ if(liveMode()){
+  let busy;try{busy=((await bridgeFetch(`/api/runs?projectId=${encodeURIComponent(p.id)}&limit=50`)).runs||[]).find(r=>r.featureId===f.id&&r.status==='running');}
+  catch(error){return toast(`Não foi possível confirmar no bridge que a tentativa anterior terminou: ${error.message}`,'error');}
+  if(project()!==p||runner)return;
+  if(busy)return confirmAction('Tentativa anterior ainda rodando',`A execução de ${agentById(busy.agentId)?.name||'um agente'} na ${f.key}, iniciada às ${new Date(busy.startedAt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}, continua rodando no bridge. Retomar agora poria dois agentes na mesma pasta. Cancelar essa execução e retomar?`,async()=>{closeModal();try{await bridgeFetch(`/api/runs/${encodeURIComponent(busy.id)}/cancel`,{method:'POST'});}catch(error){return toast(`Não foi possível cancelar a execução anterior: ${error.message}`,'error');}await new Promise(r=>setTimeout(r,1500));resumeFeature(featureId);},'Cancelar e retomar',true);
+ }
+ const a=agentById(f.route[pt.step]);
+ beginRun({featureId:f.id,paused:false,single:true,phase:'running',sprintId:sprintOf(f)?.id||'',kind:'feature',label:f.key,onlyId:f.id,resume:{featureId:f.id,step:pt.step,error:pt.error}},`${f.key} retomada com ${a.name}`);
+ f.status='running';f.step=pt.step;f.currentAgentId=a.id;
+ log(`${f.key}: etapa ${pt.step+1}/${f.route.length} retomada com ${a.name}, sem novo plano do comandante.`,'agent',a.id);
+ roomPush({kind:'system',text:`${f.key} retomada na etapa ${pt.step+1} de ${f.route.length}, com ${a.name}. Rota: ${f.route.map(id=>agentById(id)?.name).join(' > ')}. Sem novo plano: valem as instruções do comandante e as entregas anteriores desta rota.`});
+ $$('#roomFeed [data-action="feature-resume"]').forEach(b=>b.closest('.room-card-actions')?.remove());
+ openOpsChat();roomStepStart(f,null);save();render();refreshFeatureModal();scheduleStep(simulationStep);
+}
+function resumeNote(f){
+ const r=runner?.resume;if(!r||r.featureId!==f.id||r.step!==f.step)return'';
+ return`## Retomada de uma tentativa interrompida\nA sua etapa já foi tentada e parou antes do fim${r.error?` (${r.error})`:''}. O que essa tentativa fez continua nesta pasta, sem commit, e a sessão dela não volta: você começa uma conversa nova. Antes de escrever qualquer coisa, confira o que já existe com git status e git diff (sem shell, leia os arquivos que a sua etapa envolve). Pode haver arquivo pela metade, build quebrado ou teste falhando. Continue de onde parou: mantenha o que está certo, corrija o que ficou incompleto e não refaça o resto.`;
+}
 function launchNext(preferredId=null){
  if(!runner||runner.paused||runner.phase!=='running')return;refreshBlocked();const p=project(),cmdId=p.commanderId;
  const f=preferredId?featureById(preferredId):p.features.filter(f=>f.status==='ready'&&f.route.length&&depsReady(f)&&(!runner.sprintId||sprintOf(f)?.id===runner.sprintId)).sort((a,b)=>a.priority.localeCompare(b.priority))[0];
@@ -14665,7 +14717,7 @@ document.addEventListener('click',event=>{
   case 'features':openFeatures();break;case 'feature-new':openFeatureEditor(null,control.dataset.sprint);break;case 'feature-run':startRun({featureId:agentId});break;case 'sprint-run':startRun({sprintId:agentId});break;case 'sprint-new':openSprintEditor();break;case 'sprint-edit':openSprintEditor(agentId);break;case 'sprint-delete':deleteSprint(agentId);break;case 'sprint-toggle':{const s=sprintById(agentId);if(s){const open=control.getAttribute('aria-expanded')==='true';setSprintOpen(s.id,!open);render();}break;}case 'feature-open':openFeature(agentId);break;case 'feature-delete':deleteFeature(agentId);break;case 'fe-attach-confirm':feAttachConfirm();break;case 'fe-attach-cancel':feAttachCancel();break;case 'fe-attach-remove':feAttachRemove(agentId);break;
   case 'feature-approve':approveFeature(agentId,true);break;case 'feature-rework':reviewRework(true);break;case 'review-rework-cancel':reviewRework(false);break;case 'review-tab':reviewTab(agentId);break;case 'review-file':{const f=featureById(ui.reviewDesk?.id);if(f)reviewFileOpen(f,agentId);break;}case 'review-files-reload':{const f=featureById(ui.reviewDesk?.id);if(f)reviewFilesLoad(f);break;}
   case 'distribute':openDistribution();break;case 'plan-apply':applyPlan(control.dataset.run==='1');break;
-  case 'run':startRun();break;case 'stop':stopRun();break;case 'room':openOpsChat();break;case 'ops-chat-min':opsChatMin(true);break;case 'ops-chat-restore':opsChatMin(false);break;case 'ops-chat-close':opsChatClose();break;case 'room-approve':roomApprove();break;case 'room-cancel':stopRun();break;case 'spawn':openSpawn(agentId);break;
+  case 'run':startRun();break;case 'stop':stopRun();break;case 'room':openOpsChat();break;case 'ops-chat-min':opsChatMin(true);break;case 'ops-chat-restore':opsChatMin(false);break;case 'ops-chat-close':opsChatClose();break;case 'feature-resume':resumeFeature(agentId);break;case 'room-approve':roomApprove();break;case 'room-cancel':stopRun();break;case 'spawn':openSpawn(agentId);break;
   case 'handoff-new':openHandoffForm();break;case 'handoff-history':openHandoffHistory();break;
   case 'logs':if(runner&&liveMode()&&control.id==='transmissionStrip')openConsole();else openLogs();break;case 'log-filter':ui.logFilter=control.dataset.filter;openLogs();break;
   case 'logs-export':download('squad-code-transmissions.json',JSON.stringify(project().logs,null,2));break;

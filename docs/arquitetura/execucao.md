@@ -62,7 +62,13 @@ Retomar; `launchNext`/`scheduleStep` only move in `running`):
   `Agent` to `tools`/`allowedTools`. `buildStepPrompt` adds the commander's instruction and the colleagues list. `roomEvent` maps
   the stream: text → bubbles, tool_use → chips (`toolActivity`), `Agent` → call card (`roomCalling`), subagent messages
   (`parent_tool_use_id`) → thread, tool_result → the card's answer. Chats never get agents.
-- Individual spawn (`spawnAgent`, `kind:'spawn'`) skips the commander but runs in the room too.
+- Individual spawn (`spawnAgent`, `kind:'spawn'`) skips the commander but runs in the room too. It overwrites `f.route`/`f.briefs`.
+- A failed step (`liveStep`: `[FALHA]` output, status `ready`, `step` 0; route, briefs and `runStart` kept) can be resumed:
+  `resumePoint(f)` = the number of deliveries since `runStart`, valid while the route still has the failed agent at that step;
+  `roomResumeHTML` puts **Retomar com <agente>** on the latest error message of that feature; `resumeFeature` (live: refused while
+  `GET /api/runs` shows a run of that feature still running, with `confirmAction` to cancel it first) starts a `kind:'feature'`
+  runner at that step with no plan, and `runner.resume` makes `buildStepPrompt` add `resumeNote` (work left uncommitted, check
+  git status/diff, finish without redoing). `streamRun` reconnects with `?after=` (`STREAM_RETRY`, about 80 s) before a step fails.
 "Distribuir features" (`openDistribution`, deterministic `routeFor` plan, `applyPlan`) still exists for planning by hand, and
 `launchNext` only picks features of `runner.sprintId`. The export orders features sprint by sprint,
 adds `sprint:` to each `spec.md`, a Sprints section to `scope.md` and `/executar-sprint`.

@@ -299,7 +299,7 @@ $env:SQUAD_CLAUDE_BIN = "C:\caminho\para\claude.exe"; npm start   # Windows Powe
 No menu de configurações (botão **Configurações** no topo ou clique no status do Claude Code):
 
 - **Aba Claude Code:** modo (real ou demo), executável, modo de permissão (padrão `acceptEdits`), modelo e esforço
-  globais, orçamento máximo por etapa (`--max-budget-usd`), tempo limite (padrão 900 s), execuções simultâneas
+  globais, orçamento máximo por etapa (`--max-budget-usd`), tempo limite (padrão 2400 s), execuções simultâneas
   (padrão 2), regras extras de `allowedTools` e `--add-dir`.
 - **Aba Ambiente:** as ferramentas de desenvolvimento encontradas nesta máquina (Git, Node.js, Python, .NET SDK, JDK, Go,
   Flutter, Rust e Docker), com versão, comando de verificação e link de instalação do que falta.

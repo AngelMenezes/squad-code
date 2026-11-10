@@ -10,7 +10,8 @@ file from `userPlugins`, `claude plugin list --json` cached `PLUGIN_TTL`, warmed
 prompt to a temp file passed as `--append-system-prompt-file`, sends the step prompt via **stdin**
 (never shell-interpolated), and streams events back. Options (permission mode, effort, tools, model,
 dirs, budget, `partial` → `--include-partial-messages`) are whitelisted. Limits: body 2 MB, prompt 400k chars, system prompt 100k (silently
-sliced). It also reads/writes Claude `settings.json` files (user/project/local) with a `.bak` copy.
+sliced). Every event of a run gets its number `n` (`pushEvent`); `GET /api/runs/<id>/events?after=n` replays only the later ones, so
+`streamRun` (app) reconnects after a dropped stream without repeating events. The default `timeoutSec` is 2400. It also reads/writes Claude `settings.json` files (user/project/local) with a `.bak` copy.
 Every project runs in its own folder: the `project` option (a plain slug, `FOLDER_RE`, no Windows reserved names) becomes the
 cwd `<PROJECTS_DIR>/<folder>` (`./projects` next to `server.js`, created at start; `SQUAD_PROJECTS_DIR` for tests), created on the
 first run. Because Claude Code loads CLAUDE.md from every folder above the cwd, those runs also get `--settings <temp file>` with

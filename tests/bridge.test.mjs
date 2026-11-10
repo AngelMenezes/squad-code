@@ -1506,3 +1506,14 @@ test('a database from before images keeps its text attachments (migration 3)', a
   assert.deepEqual([a.text, a.mime, a.note, a.data], ['# Notas\n', 'text/plain', '', undefined]);
   await b.stop();
 });
+
+test('run events are numbered and a reconnection with ?after=n gets only what it missed', async () => {
+  const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { project: 'op-090-after', cwd: workdir } }) });
+  assert.equal(res.status, 201, await res.clone().text());
+  const { runId } = await res.json();
+  const all = await collect(runId);
+  assert.ok(all.length > 2 && all.at(-1).type === 'exit');
+  assert.deepEqual(all.map(e => e.n), all.map((_, i) => i + 1));
+  const cut = all[1].n, rest = (await (await fetch(`${BASE}/api/runs/${runId}/events?token=${token}&after=${cut}`)).text()).split('\n').filter(l => l.startsWith('data: ')).map(l => JSON.parse(l.slice(6)));
+  assert.deepEqual(rest.map(e => e.n), all.slice(2).map(e => e.n));
+});

@@ -26,7 +26,7 @@ Com o bridge conectado e o modo **Claude Code real** ativo, cada etapa da rota d
 - **Ferramentas**: as marcadas no estúdio vão para `--tools` (restrição, desligável) e `--allowedTools`, somadas às regras extras (ex.: `Bash(npm test)`).
 - **Permissões**: modo global (padrão `acceptEdits`). Em modo headless ninguém aprova prompts (`--permission-prompts none`), então o que exigiria aprovação é negado e aparece no console.
 
-O resultado de cada agente vira o contexto de handoff do próximo. A última etapa envia a feature para **Revisão humana**; somente a aprovação a conclui e libera as dependentes. Pausar deixa a etapa em andamento terminar. Encerrar mata o processo (`taskkill /T` no Windows). Uma falha devolve a feature para Prontas.
+O resultado de cada agente vira o contexto de handoff do próximo. A última etapa envia a feature para **Revisão humana**; somente a aprovação a conclui e libera as dependentes. Pausar deixa a etapa em andamento terminar. Encerrar mata o processo (`taskkill /T` no Windows). Uma falha devolve a feature para Prontas, e a mensagem do agente no chat da operação ganha o botão **Retomar com <agente>**: a feature recomeça daquela etapa, com a mesma rota, as instruções do comandante e as entregas anteriores, sem um novo plano, e o agente é avisado de que o trabalho da tentativa anterior está na pasta sem commit. Rodar a feature de novo continua passando pelo comandante. Se a conexão da página com o bridge cair durante uma etapa, a página reconecta sozinha por cerca de um minuto e meio antes de dar a etapa como falha.
 
 O **Console** (tecla `C`, ou a faixa de transmissões durante a operação) mostra ao vivo o comando, a sessão, as ferramentas usadas, o texto do agente, as permissões negadas e o custo.
 
