@@ -19,7 +19,9 @@ first run. Because Claude Code loads CLAUDE.md from every folder above the cwd, 
 own git repository (`ensureProjectRepo`: `git init` before a run when `.git` is missing, always on branch `main` via `symbolic-ref`; skipped without git) and project runs get
 `GIT_CEILING_DIRECTORIES` = PROJECTS_DIR (`gitCeiling`), so Claude Code (git status, `.claude/settings.json` from the repo root outside
 Windows) and the agents' git commands never reach the enclosing repository (this app's clone). The same settings file sets
-`permissions.blockReadsOutsideWorkingDirectories`, so the file tools refuse reads outside the folder (and `--add-dir`). Linked operations: the `repo` option (an id of `REPOS_FILE` = `SQUAD_REPOS` or `data/repos.json`, `loadRepos`/`repoEntry`, read on every
+`permissions.blockReadsOutsideWorkingDirectories`, so the file tools refuse reads outside the folder (and `--add-dir`). It also makes Claude Code ask for approval of any Bash
+command whose paths it cannot check (loops, command substitution), which a step denies unrun: project runs with Bash (or every tool)
+get `SHELL_NOTE` at the end of the prompt (simple commands only, one call per repetition), and `denialNotes` explains it. Linked operations: the `repo` option (an id of `REPOS_FILE` = `SQUAD_REPOS` or `data/repos.json`, `loadRepos`/`repoEntry`, read on every
 use; entries `{id, name, path | url, subdir, baseBranch, prepare}`; written only by `PUT|DELETE /api/repos/:id` (`saveRepoEntry`,
 `.bak` copy, unknown fields kept, a broken file is a 409 and never overwritten), `GET /api/repos` (`reposListing`: paths, URLs masked by
 `maskUrl`); URLs with userinfo are refused from the page (`CRED_URL_RE`)). **Monorepo:** `subdir`, or a `path` inside a repository

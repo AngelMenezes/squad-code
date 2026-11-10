@@ -1391,6 +1391,10 @@ test('the tools of this machine come from their version commands, are cached, an
   assert.match(withEnv, /## Ferramentas instaladas nesta máquina\nO bridge verificou: [^\n]*\.NET SDK 8\.0\.100, 9\.0\.200; Go 1\.23\.0[^\n]*Não encontradas: [^\n]*Java \(JDK\)/);
   assert.match(withEnv, /não finja que ela existe/);
   assert.ok(!(await run({})).includes('Ferramentas instaladas'));
+  // Project runs with Bash (or every tool) are told to avoid loops and command substitution, which would ask for approval.
+  assert.match(withEnv, /## Comandos no terminal\n[^\n]*sem laços/);
+  assert.ok((await run({ tools: ['Read', 'Bash'] })).includes('## Comandos no terminal'));
+  assert.ok(!(await run({ tools: ['Read'] })).includes('## Comandos no terminal'));
 });
 
 test('feature attachments: stored apart, written in the step folder out of git, listed in the prompt, cleared and swept', async t => {

@@ -803,6 +803,10 @@ function envNote(data) {
   return `\n\n## Ferramentas instaladas nesta máquina\nO bridge verificou: ${have.map(t => `${t.name} ${t.versions?.length > 1 ? t.versions.join(', ') : t.version}`).join('; ') || 'nenhuma das ferramentas conhecidas'}.${miss.length ? ` Não encontradas: ${miss.map(t => t.name).join(', ')}.` : ''}\nAo fixar versões (SDK, runtime, global.json, engines, go.mod, pubspec, imagens...), use as que existem aqui. Se a solução pedir uma ferramenta não encontrada, não finja que ela existe: escreva o código mesmo assim e registre no relatório o que a pessoa precisa instalar, com o link oficial e o comando de verificação. O README do projeto deve listar os pré-requisitos com as versões usadas.`;
 }
 
+// blockReadsOutsideWorkingDirectories (startRun) makes Claude Code check every path a Bash command can read; a loop or a command
+// substitution cannot be checked, so it asks for approval, which a step cannot give (dontAsk and headless deny it unrun).
+const SHELL_NOTE = '\n\n## Comandos no terminal\nNinguém aprova comandos durante esta etapa: um comando que pedir aprovação é negado e não roda. Cada chamada do Bash deve ser um comando simples ou comandos ligados por |, ;, && ou ||, sem laços (for, while, until) e sem substituição de comando ($( ) ou crases), que o Claude Code não consegue conferir e manda aprovar. Para repetir um comando, faça uma chamada para cada vez; se um comando for negado, divida em chamadas simples.';
+
 function killTree(child) {
   if (!child || child.exitCode !== null || child.killed) return;
   if (IS_WIN) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
@@ -1026,7 +1030,7 @@ async function startRun(body) {
   const run = {
     id, status: 'running', phase: prep ? 'preparing' : 'running', startedAt: new Date().toISOString(), endedAt: null, label: String(body.label || '').slice(0, 200),
     cwd: opts.cwd, args: args.map(a => a === sysFile ? '<system-prompt-file>' : a === settingsFile ? '<settings-file>' : a === agentsFile ? '<agents-file>' : a), child: null, prepChild: null, events: [], clients: new Set(),
-    result: null, sysFile, settingsFile, agentsFile, timer: null, cancelled: false, envNote: envText,
+    result: null, sysFile, settingsFile, agentsFile, timer: null, cancelled: false, envNote: envText, shellNote: opts.projectRun && (!opts.tools || opts.tools.includes('Bash')) ? SHELL_NOTE : '',
     // History: who ran it and where (body.meta, whitelisted in db.js), saved events count and the batch waiting to be written.
     // Without a database yet (direct API use before the setup), the run still works but stays out of the history.
     meta: dbModule.runMeta(body.meta), project: typeof body.options?.project === 'string' ? body.options.project.slice(0, 80) : '', persist: !!store, saved: 0, pending: [], flushTimer: null,
@@ -1165,7 +1169,7 @@ function launchRun(run, resolved, args, opts, prompt) {
   });
 
   child.stdin.on('error', () => {});
-  child.stdin.end(prompt + (run.promptExtra || '') + (run.envNote || ''), 'utf8');
+  child.stdin.end(prompt + (run.promptExtra || '') + (run.shellNote || '') + (run.envNote || ''), 'utf8');
 }
 
 /** Ends a run once: exit event, history, subscribers and temp files. Also for runs that end while preparing (error or cancel). */

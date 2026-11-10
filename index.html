@@ -13112,7 +13112,7 @@ function runAllowedTools(args){const i=(args||[]).indexOf('--allowedTools');retu
 // A step has nobody to approve anything: a denied call of a tool it was given asked for approval, so fixing the tools would not help.
 function denialNotes(evt,allowed){
  const list=evt.permission_denials||[],free=list.filter(d=>allowed.includes(d.tool_name)),rest=list.filter(d=>!allowed.includes(d.tool_name)),notes=[];
- if(free.length){const what=[...new Set(free.map(d=>{const v=d.tool_input||{};return`"${String(v.command||v.file_path||v.path||v.pattern||d.tool_name).replace(/\s+/g,' ').slice(0,120)}"`;}))];notes.push(`Negado: ${what.slice(0,5).join(', ')}${what.length>5?` e mais ${what.length-5}`:''}. A ferramenta estava liberada, mas isso pediu aprovação, que a etapa não tem como dar, e não foi executado.`);}
+ if(free.length){const what=[...new Set(free.map(d=>{const v=d.tool_input||{};return`"${String(v.command||v.file_path||v.path||v.pattern||d.tool_name).replace(/\s+/g,' ').slice(0,120)}"`;}))];notes.push(`Negado: ${what.slice(0,5).join(', ')}${what.length>5?` e mais ${what.length-5}`:''}. A ferramenta estava liberada, mas isso pediu aprovação, que a etapa não tem como dar, e não foi executado.${free.some(d=>d.tool_name==='Bash')?' No Bash, laços (for, while) e substituição de comando ($( )) pedem aprovação porque o Claude Code não confere os caminhos que eles leem: rodados como comandos simples, em chamadas separadas, passam.':''}`);}
  if(rest.length)notes.push(`Permissões negadas: ${[...new Set(rest.map(d=>d.tool_name))].join(', ')}. Ajuste ferramentas ou o modo de permissão.`);
  return notes;
 }
