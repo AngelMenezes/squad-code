@@ -91,7 +91,7 @@ Reference detail for Claude Code sessions, read on demand from the index in CLAU
   `mapUpdate`) add `mapRef`, `permissionMode: 'dontAsk'`, Write/Edit in `tools` and only `Write(docs/squad/**)`/`Edit(docs/squad/**)` in
   `allowedTools` (plain write tools removed), so even an agent without Write writes there and nowhere else; the other features send
   `conventions` = `project.codeStandard` ('repo' default | 'squad'; persisted, PADRÃO DE CÓDIGO in `repoFieldHTML`). The prompts say
-  the bridge commits and writes `.reconhecimento` (no git asked of agents), and `commanderPlanPrompt` lists each colleague's tools (and marks map features, where everyone writes `docs/squad`);
+  the bridge commits and writes `.reconhecimento` (no git asked of agents), and `commanderPlanPrompt` lists each colleague's tools (and marks map features, where everyone writes `docs/squad`; in a linked operation it tells the commander that ordinary features never edit `docs/squad`, and their step prompt says the same: structure changes go in the report and the map is updated by **Atualizar mapa**, since only map features move `.reconhecimento` and a map fixed elsewhere leaves that reference behind);
   the console shows the `commit` event and the room only a refused commit; the room and the console show the `worktree` event
   and the preparing phase (`prepare` steps as the typing line, `PREP_TYPING`, and a note for the prepare command; `prepare-log` in the console),
   and `approveFeature` asks the bridge to remove the worktree (the branch stays for the PR). `ui.baseChecks[repoId]` (transient,
