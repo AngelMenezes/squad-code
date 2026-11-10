@@ -63,7 +63,8 @@ Reference detail for Claude Code sessions, read on demand from the index in CLAU
 - Existing repository: `project.repoId` (persisted; chosen in the wizard or the briefing's REPOSITÓRIO EXISTENTE, `repoFieldHTML`, from
   `ui.bridge.repos`; fixed once a feature has an output, `repoLocked`) goes to the bridge as `repo` in `runOptionsFor`. Repositories are
   registered in Configurações > Repositórios (tab `repos`: `loadRepoList`, `renderRepoPane`, `#repoForm` → `saveRepo` → `registerRepo`, `repoDelete` with
-  a second click to confirm; the identifier field is named `key`, since a control named `id` would shadow `form.id` in the submit router).
+  a second click to confirm, refused while an operation still has that `repoId`, since its clone and runs depend on it; the briefing's Agent Teams runs
+  use the select on screen before saving, `formRepoProject`, since the bridge clones the repository on the first run, chats included; the identifier field is named `key`, since a control named `id` would shadow `form.id` in the submit router).
   `project.reconMode` (persisted, 'map' | 'direct' | 'team', RECONHECIMENTO in the briefing, `.if-linked`, locked like the repository):
   `teamMode(p)` = linked + 'team' (the team's map, docs/squad from another developer's merged reconnaissance, is on the base branch):
   no F00 and no tokens spent mapping again; `skipRecon` (direct or team) drives `ensureSetup`, `runGaps` and `runGate`, and team steps

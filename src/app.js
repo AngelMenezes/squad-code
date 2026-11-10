@@ -1784,6 +1784,9 @@ function undoCoWrite(mid){const c=chatNow(),m=c?.messages.find(x=>x.id===mid);if
 // the round is a queue of agents (docTurnCrew): each one is its own claude -p (own instructions, SOUL, model and effort), sees what
 // the previous ones said in this round and can pass the word to a colleague ("next"), at most TEAMS_ROUND turns per round.
 const TEAMS_ROUND=3;
+// The briefing's REPOSITÓRIO EXISTENTE before it is saved: the co-writing runs follow the select on screen, not the stored repoId
+// (the bridge clones that repository into the operation folder on the first run, chats included). A locked select keeps the stored one.
+function formRepoProject(p){const f=$('#projectForm')?.elements.namedItem('repoId');return p&&f&&!f.disabled?{...p,repoId:/^[a-z0-9][a-z0-9-]{0,79}$/.test(f.value)?f.value:''}:p;}
 async function runCoWrite(msgs){
  const c=chatNow(),doc=c?.kind==='doc'?PROJECT_DOCS[c.doc]:null;if(!c||c.kind==='agent'||!msgs.length)return;
  const crew=c.group?docTurnCrew(c,msgs):[chatAgent(c)].filter(Boolean);if(!crew.length)return;
@@ -1795,7 +1798,7 @@ async function runCoWrite(msgs){
    const turn={i,crew,round};
    try{
     // Chat runs: no tools and no plan mode (its planning flow slowed replies and made the model fake tool calls); text streams live.
-    const started=await bridgeFetch('/api/runs',{method:'POST',body:JSON.stringify({prompt:doc?docCoWritePrompt(a,c,msgs,turn):coWritePrompt(a,msgs),systemPrompt:agentSystemPrompt(a)+'\n\n'+[soulBlock(a,chatGreeting(c,a)),doc?docCoWriteSystem(doc,a,c,turn):COWRITE_SYSTEM].filter(Boolean).join('\n\n'),label:doc?`${a.name} / co-escrita ${doc.title.toLowerCase()}`:`${a.name} / co-escrita ${ui.opsFeatureDraft?.feature.key||''}`,meta:runMeta(doc&&ui.opsNew?null:project(),a,doc?null:ui.opsFeatureDraft?.feature,doc?'doc':'cowrite'),options:{...runOptionsFor(a,runtime(),doc&&ui.opsNew?null:project()),...CHAT_RUN,...(doc?{timeoutSec:300}:{})}})});
+    const started=await bridgeFetch('/api/runs',{method:'POST',body:JSON.stringify({prompt:doc?docCoWritePrompt(a,c,msgs,turn):coWritePrompt(a,msgs),systemPrompt:agentSystemPrompt(a)+'\n\n'+[soulBlock(a,chatGreeting(c,a)),doc?docCoWriteSystem(doc,a,c,turn):COWRITE_SYSTEM].filter(Boolean).join('\n\n'),label:doc?`${a.name} / co-escrita ${doc.title.toLowerCase()}`:`${a.name} / co-escrita ${ui.opsFeatureDraft?.feature.key||''}`,meta:runMeta(doc&&ui.opsNew?null:project(),a,doc?null:ui.opsFeatureDraft?.feature,doc?'doc':'cowrite'),options:{...runOptionsFor(a,runtime(),doc&&ui.opsNew?null:formRepoProject(project())),...CHAT_RUN,...(doc?{timeoutSec:300}:{})}})});
     if(!mine()){bridgeFetch(`/api/runs/${started.runId}/cancel`,{method:'POST'}).catch(()=>{});return;}
     c.runId=started.runId;c.read=true;chatReceipt();chatTyping(true);
     // The tile goes from "pensando" to "falando" with the first words; a screen still shared by a colleague goes back to the gallery.
@@ -3438,8 +3441,9 @@ async function saveRepo(form){
  catch(error){toast(error.message,'error');}
 }
 async function repoDelete(id){
+ const ops=state.projects.filter(p=>p.repoId===id);if(ops.length){ui.repoDel='';renderRepoPane();return toast(`O repositório ${id} está vinculado a ${ops.map(p=>`${p.code} ${p.name}`).join(', ')}: remover do cadastro quebra as execuções dessas operações. Para usar outro repositório, troque no briefing da operação (enquanto nenhuma feature tiver entrega); para remover este, exclua antes as operações que o usam.`,'error');}
  if(ui.repoDel!==id){ui.repoDel=id;return renderRepoPane();}
- try{ui.repoList=await bridgeFetch(`/api/repos/${id}`,{method:'DELETE'});ui.repoDel='';renderRepoPane();checkBridge();const n=state.projects.filter(p=>p.repoId===id).length;toast(`Repositório ${id} removido do cadastro.${n?` ${n} operação(ões) ainda o usam: os clones ficam, mas novas execuções falham até ele voltar ao cadastro.`:''}`);}
+ try{ui.repoList=await bridgeFetch(`/api/repos/${id}`,{method:'DELETE'});ui.repoDel='';renderRepoPane();checkBridge();toast(`Repositório ${id} removido do cadastro.`);}
  catch(error){toast(error.message,'error');}
 }
 function saveRuntime(form){
