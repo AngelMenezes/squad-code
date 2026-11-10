@@ -805,7 +805,7 @@ function envNote(data) {
 
 // blockReadsOutsideWorkingDirectories (startRun) makes Claude Code check every path a Bash command can read; a loop or a command
 // substitution cannot be checked, so it asks for approval, which a step cannot give (dontAsk and headless deny it unrun).
-const SHELL_NOTE = '\n\n## Comandos no terminal\nNinguém aprova comandos durante esta etapa: um comando que pedir aprovação é negado e não roda. Cada chamada do Bash deve ser um comando simples ou comandos ligados por |, ;, && ou ||, sem laços (for, while, until) e sem substituição de comando ($( ) ou crases), que o Claude Code não consegue conferir e manda aprovar. Para repetir um comando, faça uma chamada para cada vez; se um comando for negado, divida em chamadas simples.';
+const SHELL_NOTE = '\n\n## Comandos no terminal\nNinguém aprova comandos durante esta etapa: um comando que pedir aprovação é negado e não roda. Cada chamada do Bash deve ser um comando simples ou comandos ligados por |, ;, && ou ||, sem laços (for, while, until) e sem substituição de comando ($( ) ou crases), que o Claude Code não consegue conferir e manda aprovar. Para repetir um comando, faça uma chamada para cada vez; se um comando for negado, divida em chamadas simples. Não leia nada fora da pasta da etapa, nem com Read nem no Bash: isso também é negado, inclusive o .git do clone acima de um worktree (o arquivo .git da pasta só aponta para ele). Para branches, commits e refs use comandos git (git rev-parse, git log, git branch -a, git show), que funcionam daqui.';
 
 function killTree(child) {
   if (!child || child.exitCode !== null || child.killed) return;
