@@ -22,7 +22,9 @@ Windows) and the agents' git commands never reach the enclosing repository (this
 `permissions.blockReadsOutsideWorkingDirectories`, so the file tools refuse reads outside the folder (and `--add-dir`). It also makes Claude Code ask for approval of any Bash
 command whose paths it cannot check (loops, command substitution), which a step denies unrun: project runs with Bash (or every tool)
 get `SHELL_NOTE` at the end of the prompt (simple commands only, one call per repetition, nothing read outside the folder, the
-clone's `.git` above a worktree included, git commands for refs), and `denialNotes` explains both causes. Linked operations: the `repo` option (an id of `REPOS_FILE` = `SQUAD_REPOS` or `data/repos.json`, `loadRepos`/`repoEntry`, read on every
+clone's `.git` above a worktree included, git commands for refs, a time limit on every test run and at most 10 repetitions of a
+suite, one call each, never a script running the whole battery), and `denialNotes` explains both causes. Every project run also gets
+`timeNote(timeoutSec)` (the step is killed at that limit with no report, so it keeps the last minutes for the report). Linked operations: the `repo` option (an id of `REPOS_FILE` = `SQUAD_REPOS` or `data/repos.json`, `loadRepos`/`repoEntry`, read on every
 use; entries `{id, name, path | url, subdir, baseBranch, prepare}`; written only by `PUT|DELETE /api/repos/:id` (`saveRepoEntry`,
 `.bak` copy, unknown fields kept, a broken file is a 409 and never overwritten), `GET /api/repos` (`reposListing`: paths, URLs masked by
 `maskUrl`); URLs with userinfo are refused from the page (`CRED_URL_RE`)). **Monorepo:** `subdir`, or a `path` inside a repository

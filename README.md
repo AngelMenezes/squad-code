@@ -399,7 +399,9 @@ Então:
     base (merge ou fast-forward) e também a que entrou por squash: algum commit da base deixou todos os arquivos que ela
     mudou exatamente como na branch, mesmo que a base tenha mudado esses arquivos depois. Uma branch sem commits aparece
     como "sem commits". Ao voltar para a aba do app, a verificação roda sozinha (no máximo a cada 2 minutos).
-  - **Marcar como mergeada:** confirmação manual, para quando a verificação não consegue reconhecer o merge.
+  - **Marcar como mergeada:** confirmação manual, para quando a verificação não consegue reconhecer o merge. Antes de
+    confirmar, o app faz `git fetch` e confere a branch: se o merge já está na base, ela é marcada sozinha; se não está, a
+    confirmação avisa que as features dependentes começariam de uma base sem esse código (espere o pull request ser mergeado).
 - O comandante planeja com o mapa: ele recebe `docs/squad/mapa.md` e a lista de mudanças desde o mapa, e indica por quais
   arquivos cada colega começa ("Comece lendo: …" na instrução de cada um). Antes de você aprovar o plano, o bridge
   confere cada caminho na branch base; os que não existem saem das instruções e são listados no chat da operação.

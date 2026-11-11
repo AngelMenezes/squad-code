@@ -1395,6 +1395,11 @@ test('the tools of this machine come from their version commands, are cached, an
   assert.match(withEnv, /## Comandos no terminal\n[^\n]*sem laços/);
   assert.ok((await run({ tools: ['Read', 'Bash'] })).includes('## Comandos no terminal'));
   assert.ok(!(await run({ tools: ['Read'] })).includes('## Comandos no terminal'));
+  // ... and to bound each test run and repeated suites; every project run gets its time limit (default 2400 s = 40 min).
+  assert.match(withEnv, /um limite de tempo[^\n]*no máximo 10 vezes/);
+  assert.match(withEnv, /## Tempo da etapa\nEsta etapa é encerrada à força depois de 40 min/);
+  const readOnly = await run({ tools: ['Read'], timeoutSec: 600 });
+  assert.match(readOnly, /## Tempo da etapa\n[^\n]*depois de 10 min/);
 });
 
 test('feature attachments: stored apart, written in the step folder out of git, listed in the prompt, cleared and swept', async t => {

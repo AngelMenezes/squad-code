@@ -10920,13 +10920,13 @@ function modelDefaultEffort(m){return /^(opus(\[1m\])?|claude-opus-5-5)$/.test(S
 // Effective effort of a run: the global runtime effort overrides the agent's (like the model); none for models without effort.
 function agentEffort(a,r=runtime()){const model=r.model||(a?.model&&a.model!=='inherit'?a.model:'');if(!modelEffortSupport(model||a?.model))return{model,effort:'',source:'none'};if(r.effort)return{model,effort:r.effort,source:'global'};return{model,effort:a?.effort||'',source:a?.effort?'agent':'default'};}
 const ADR_STATUS=['Proposto','Aceito','Rejeitado','Depreciado','Substituído'];
-const DEFAULT_RUNTIME={mode:'claude',claudePath:'',permissionMode:'acceptEdits',model:'',effort:'',maxBudgetUsd:'',timeoutSec:900,concurrency:2,addDirs:'',restrictTools:true,extraAllowedTools:''};
+const DEFAULT_RUNTIME={mode:'claude',claudePath:'',permissionMode:'acceptEdits',model:'',effort:'',maxBudgetUsd:'',timeoutSec:2400,concurrency:2,addDirs:'',restrictTools:true,extraAllowedTools:''};
 const STORE='squad-code.network.v2';
-// catalogVersion: one-time catalog migrations already applied to this workspace (migrateCatalogAgents). New workspaces start current.
+// catalogVersion: one-time catalog and settings migrations already applied to this workspace (migrateCatalogAgents). New workspaces start current.
 // teamsChat: width of the Agent Teams chat panel in px (0 = default). opsChat: width of the docked operation chat (0 = default).
 // opSeq: highest operation number ever given (OP-<n>), so a deleted operation's code is never reused (nextOpCode).
 // mapQuality: graphics of the hex city ('high': shadows, ambient occlusion and bloom; 'low': plain render).
-const DEFAULT_SETTINGS={motion:true,stepMs:1800,squadView:'city',cityShape:'flat',mapQuality:'high',catalogVersion:2,teamsChat:0,opsChat:0,opSeq:0,runtime:{...DEFAULT_RUNTIME}};
+const DEFAULT_SETTINGS={motion:true,stepMs:1800,squadView:'city',cityShape:'flat',mapQuality:'high',catalogVersion:3,teamsChat:0,opsChat:0,opSeq:0,runtime:{...DEFAULT_RUNTIME}};
 function normalizeRuntime(r={}){const str=(v,max)=>typeof v==='string'?v.slice(0,max).trim():'';const n=Number(r.timeoutSec),c=Number(r.concurrency),b=Number(r.maxBudgetUsd);return{mode:r.mode==='demo'?'demo':'claude',claudePath:str(r.claudePath,400),permissionMode:Object.hasOwn(PERMISSION_MODES,r.permissionMode)?r.permissionMode:'acceptEdits',model:/^[A-Za-z0-9._\-\[\]]{0,80}$/.test(r.model||'')?(r.model||''):'',effort:EFFORTS.includes(r.effort)?r.effort:'',maxBudgetUsd:Number.isFinite(b)&&b>0&&b<=1000?String(b):'',timeoutSec:Number.isFinite(n)&&n>=10&&n<=7200?Math.round(n):2400,concurrency:Number.isInteger(c)&&c>=1&&c<=8?c:2,addDirs:str(r.addDirs,2000),restrictTools:r.restrictTools!==false,extraAllowedTools:str(r.extraAllowedTools,2000)};}
 const AGENT_STAGES={discovery:{label:'Descoberta',short:'IDEIA'},identity:{label:'Identidade',short:'IDENTIDADE'},prompt:{label:'Prompt & Tools',short:'PROMPT'},validation:{label:'Validação',short:'VALIDAÇÃO'},ready:{label:'Pronto',short:'PRONTO'}};
 const STAGE_ORDER=['discovery','identity','prompt','validation','ready'];
@@ -13375,9 +13375,18 @@ function pushBranch(featureId){
   pushSquadBranch(p,f.merge.branch,r=>{if(r.pr)(ui.mergePr||={})[f.id]=r.pr;});
  },'Enviar branch');
 }
-function markMerged(featureId){
- const p=project(),f=featureById(featureId);if(!f?.merge||f.merge.state!=='pending')return;
- confirmAction('MARCAR COMO MERGEADA',`Confirmar que ${f.merge.branch} já está na branch base?\n\nAs features que dependem de ${f.key} passam a poder rodar a partir da base.`,()=>{
+// The hand mark first asks the bridge (with git fetch) whether the branch is on the base: merged lands it as usual; not merged warns
+// that the dependents' worktrees would start from a base without that code (a new worktree always starts from the base branch).
+async function markMerged(featureId){
+ const p=project(),f=featureById(featureId);if(!f?.merge||f.merge.state!=='pending'||ui.mergeMarking)return;
+ const branch=f.merge.branch;let r=null,err='';
+ if(BRIDGE_TOKEN&&p.repoId){ui.mergeMarking=true;toast(`Conferindo ${branch} na branch base atualizada.`);
+  try{const m=await bridgeFetch(`/api/map/${p.folder}?repo=${encodeURIComponent(p.repoId)}&fetch=1&branches=${branch}`);r=m.merges?.[branch]||null;if(typeof m.fetched==='string')err=`o git fetch falhou (${m.fetched}) e a conferência usou a cópia local`;}
+  catch(error){err=error.message;}finally{ui.mergeMarking=false;}}
+ if(f.merge?.state!=='pending'||project()!==p)return;
+ if(r?.merged){applyMerges(p,{...(ui.mergeInfo?.[p.id]||{}),[branch]:r});render();return;}
+ const warn=r?.exists&&!r.empty?`\n\nAtenção: ${err?`${err}, e nela`:'conferido agora com git fetch,'} a branch base ainda não tem o código de ${branch}. Se o pull request ainda não foi mergeado, espere por ele: cada feature nova parte da branch base, e as que dependem de ${f.key} começariam sem esse código. Marque só se o merge foi feito de um jeito que a verificação não reconhece.`:err?`\n\nNão foi possível conferir a branch base: ${err}.`:'';
+ confirmAction('MARCAR COMO MERGEADA',`Confirmar que ${f.merge.branch} já está na branch base?\n\nAs features que dependem de ${f.key} passam a poder rodar a partir da base.${warn}`,()=>{
   f.merge={branch:f.merge.branch,state:'merged',at:nowISO()};log(`${f.key}: merge confirmado pelo operador.`,'system',null,p);refreshBlocked();save();render();toast(`${f.key} marcada como mergeada. Dependências liberadas.`);
  },'Marcar como mergeada');
 }
@@ -14529,6 +14538,8 @@ function migrateCatalogAgents(ws){
   }
   ws.settings.catalogVersion=2;changed=true;
  }
+ // v3: the step time limit kept the old default (900 s, too short for test suites run many times) while the bridge moved to 2400.
+ if(ws.settings.catalogVersion<3){if(ws.settings.runtime?.timeoutSec===900)ws.settings.runtime.timeoutSec=DEFAULT_RUNTIME.timeoutSec;ws.settings.catalogVersion=3;changed=true;}
  return changed;
 }
 if(migrateCatalogAgents(state))save();

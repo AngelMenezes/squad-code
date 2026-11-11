@@ -106,7 +106,9 @@ that repository, then `PUT /api/repos/:id` with the new `baseBranch`, so it appl
   Merges: approving a feature of a linked operation sets `f.merge = {branch, state:'pending', at}` (persisted, normalized); it lands
   only when merged (`featureLanded`, used by `depsReady`/`pendingDeps`/`blockedWhy`), so dependents wait ("Aguarda merge" on the
   kanban). `mapCheck` sends the pending branches and `applyMerges` lands the merged ones; `mergeNoticeHTML` (shown during runs too)
-  offers **Enviar branch** (`pushBranch`, confirmAction, PR link in `ui.mergePr`), **Marcar como mergeada** (`markMerged`) and
+  offers **Enviar branch** (`pushBranch`, confirmAction, PR link in `ui.mergePr`), **Marcar como mergeada** (`markMerged`: first checks that
+  branch with fetch; merged lands it like `applyMerges`, not merged puts in the confirmAction that the dependents' worktrees would
+  start from a base without that code) and
   **Verificar merges**; `mergeRefresh` (window focus/visible) checks with fetch, quietly, at most every 2 minutes while merges are
   pending. The commander's plan of a linked operation runs with `withMap` and asks for `files` per codename; `checkPlanPaths` has the
   bridge check them on the base before the plan card (missing ones are listed in the room), and `validatePlan(data, suggest, keep)`
@@ -172,4 +174,5 @@ that repository, then `PUT /api/repos/:id` with the new `baseBranch`, so it appl
   also on import) moves prompts still equal to an earlier catalog version (`PROMPT_PREV`: `soulHash` → `role:`/`preset:`) to the
   current text, and once per workspace (`settings.catalogVersion` < 2, persisted) adds the stack's style subsets to unedited
   DIRETRIZES (catalog base guide + only the preset's own subsets). Changing a catalog prompt: add its previous fingerprints to
-  `PROMPT_PREV`; a new one-time migration bumps `catalogVersion`.
+  `PROMPT_PREV`; a new one-time migration bumps `catalogVersion`. v3 moves a step time limit still at the old default (900 s) to
+  `DEFAULT_RUNTIME.timeoutSec` (2400, the bridge's default too).
