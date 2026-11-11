@@ -24,6 +24,11 @@ Retomar; `launchNext`/`scheduleStep` only move in `running`):
 - The plan card waits for the person: **Executar plano** (`roomApprove`, also the run button/space key while `awaiting`) writes
   `f.route` + `f.briefs` (persisted, aligned with the route, reset wherever the route changes) and starts; **Cancelar** is `stopRun`,
   which leaves every feature untouched (and cancels `runner.planRunId`).
+- Order between features: a plan item may carry `"after"` (keys of this plan that must land first) and `"afterWhy"`
+  (`COMMANDER_PLAN_SYSTEM`; `planAfter` in `validatePlan` keeps only keys of the plan, as feature ids on the item). `planChains` lists the
+  ones not in place yet (no dependency either way, directly or transitively, and not landed); `planChainHTML` shows them on the awaiting
+  card with **Encadear** (`plan-chain` → `planChainApply`: adds the dependencies, skips cycles, writes `card.chained`), so `roomApprove`
+  leaves the dependents blocked. Without it, features that build on each other start in parallel from the same base and the merge conflicts.
 - That plan only routes features that already exist; new ones come from **Planejar próxima sprint** (commander chat option
   `sprint`, bridge only). `c.focus.sprint` makes every turn carry `sprintPlanTask` (target sprint, next keys, the current proposal),
   and a ```json `{"proposal":{goal, features:[{key,title,scope,priority,description,criteria,dependsOn}]}}` (`sprintProposal`, at

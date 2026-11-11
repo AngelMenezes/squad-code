@@ -16,6 +16,16 @@ Reference detail for Claude Code sessions, read on demand from the index in CLAU
   `chatStream` grows one live bubble from the text deltas (hidden from ```json on) and `chatSettle` fills it at the end.
   Both chat headers show the effective model (`coWriterModel`) and an effort chip (`effortChipHTML`: 5-bar meter; the model's
   default, dashed, when no level is set; none for Haiku), following the same override rules as `runOptionsFor`/`agentEffort`.
+- Feature co-writing also sets **Depende de** and splits a feature (`COWRITE_SYSTEM`). `"dependencies"` (feature keys, the whole field):
+  `coWriteDeps` keeps keys with an enabled box in `#featureDeps`, the change `{field:'dependencies'}` goes through `setFeDeps` and its
+  undo value is `feDepIds()`. `"split":{context, features:[{title, scope, criteria, tasks}]}` (`coWriteSplit`, at most 5) shows the
+  split in the reply (`featureSplitMD`, provisional keys from `featureSplitStart`) with the options `split-create`/`split-adjust`, the
+  split kept on the message (`m.split`). `featureSplitChoose` (from `agentChatChoose`; `guardMutation`; refused while the draft is
+  unsaved and for setup/map features) creates the features in the form's sprint with its area and priority, chained (the first depends
+  on the open feature, each on the previous), and seeds each one's chat (`featureChatSeed`): `inherited {key, title, context, said}`
+  (the PO's summary and the person's messages of the source chat plus what that chat had inherited, 8000 chars head and tail) is kept
+  in the chat snapshot and restored by `newFeatureChat`, the first agent bubble is marked `inherit` (left out of the prompt history), and
+  `coWritePrompt` adds "## Contexto herdado". The open feature keeps its own changes in the form until Salvar feature.
 - **Agent Teams** is how the first data of an operation is co-written: an online meetup, Teams style, in a full-screen modal
   (kind `teams`, size `agent-teams`, `openAgentTeams`, only with the bridge: without `liveMode()` it toasts and does not open, there
   is no demo of it). The chat is the third co-writing kind, `doc` (`ui.docChat`, memory `ui.docChats`), on the single document
