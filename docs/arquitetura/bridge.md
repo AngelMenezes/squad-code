@@ -40,14 +40,17 @@ with the command output; the run counts as active from the start, cancel kills t
 `gitRun`'s `track`), and a failed step ends the run as an error without starting claude; such runs get `Bash(git push:*)` in `disallowedTools`. With `feature` (a slug; `featureBase` = the F00's)
 the step runs in that feature's worktree `<clone>/.wt/<feature>` on branch `squad/<feature>` (`ensureWorktree`: reused when present,
 else the existing branch or a new one from the fetched `origin/<baseBranch>`, or from `squad/<featureBase>` while
-`docs/squad/mapa.md` is not on the base; `.wt/` goes to the clone's `info/exclude`), whose new worktrees run the entry's `prepare`
+`docs/squad/mapa.md` is not on the base; `.wt/` goes to the clone's `info/exclude`; after each fetch, here and in `/api/map?fetch=1`,
+`syncLocalBase` fast-forwards the clone's local base branch to `origin/<baseBranch>`, since fetch moves only `origin/*` and agents or
+chats reading the local ref would see the history of the clone's day: `merge --ff-only` when it is checked out in the clone without
+tracked changes, `update-ref` when no worktree has it, nothing when it diverged), whose new worktrees run the entry's `prepare`
 command once (`prepareWorktree`, marker in `.git/squad-prepared-<feature>`, 15 min); the clone's own CLAUDE.md files join
 `claudeMdExcludes`, and a `bridge`/`worktree` event reports branch, notes and prepare. `DELETE /api/worktrees/:folder/:feature`
 (`removeWorktree`, 409 with uncommitted work) removes it and keeps the branch. Map freshness (`mapStatus`, git only): the commit in
 `docs/squad/.reconhecimento` (or, if it left the history, the last base commit before the date there) against `origin/<baseBranch>`,
 outside `docs/squad`: 'fresh', 'changed', 'stale' (`STRUCTURAL_RE` paths, top-level folders added/removed, or > `MAP_SMALL`
 files), 'unknown', 'missing'. Feature steps get a `bridge`/`map` event and, unless fresh/missing, the changed files appended to
-their prompt (`mapPromptNote` → `run.promptExtra`); `GET /api/map/:folder?repo=<id>[&fetch=1]` answers the same for the page. **Team map:** `GET /api/repos/:id/map[?refresh=1]`
+their prompt (`mapPromptNote` → `run.promptExtra`, naming `origin/<baseBranch>` as the ref for git and, past 40 files, the `git diff` that lists them all); `GET /api/map/:folder?repo=<id>[&fetch=1]` answers the same for the page. **Team map:** `GET /api/repos/:id/map[?refresh=1]`
 (`teamMapInfo`, no operation clone needed, cached `TEAM_TTL`, one lookup per repository at a time) reads the base branch of a
 registered repository (a local one in place, at the ref its clones start from; a URL through a shallow blobless bare clone in
 `PROJECTS_DIR/.cache/<id>.git`): `map` (`.reconhecimento` or `mapa.md` there), `commit`, `date`, `docs` (`docs/squad/projeto.json`

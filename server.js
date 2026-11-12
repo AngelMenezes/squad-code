@@ -333,6 +333,24 @@ const preparedMark = (root, slug) => path.join(root, '.git', `squad-prepared-${s
 // Commit a feature branch started from, kept after approval: a branch without commits of its own is not reported as merged.
 const startMark = (root, slug) => path.join(root, '.git', `squad-start-${slug}`);
 const gitOk = (args, cwd) => gitRun(args, cwd).then(() => true, () => false);
+/* fetch moves only origin/*: the clone's local base branch (checked out in the clone, where the chats run) would stay at the commit of
+ * the clone, and an agent running git with the base's name would read that old history. After each fetch it is fast-forwarded to
+ * origin/<base>: in the clone with merge --ff-only when it is checked out there without tracked changes, by update-ref when no
+ * worktree has it. A local branch with commits of its own (diverged) is left alone. Never throws. */
+async function syncLocalBase(root, repo) {
+  try {
+    const target = baseRef(repo);
+    const name = repo.baseBranch || (await gitRun(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], root)).replace(/^origin\//, '');
+    if (!name) return;
+    const [local, remote] = await Promise.all([gitRun(['rev-parse', '--verify', '-q', `refs/heads/${name}`], root).catch(() => ''), gitRun(['rev-parse', '--verify', '-q', `${target}^{commit}`], root).catch(() => '')]);
+    if (!local || !remote || local === remote || !await gitOk(['merge-base', '--is-ancestor', local, remote], root)) return;
+    if (await gitRun(['symbolic-ref', '--short', '-q', 'HEAD'], root).catch(() => '') === name) {
+      if (!await gitRun(['status', '--porcelain', '--untracked-files=no'], root).catch(() => 'x')) await gitRun(['merge', '--ff-only', '-q', remote], root, 120000);
+    } else if (!(await gitRun(['worktree', 'list', '--porcelain'], root).catch(() => '')).split('\n').includes(`branch refs/heads/${name}`)) {
+      await gitRun(['update-ref', `refs/heads/${name}`, remote, local], root);
+    }
+  } catch {}
+}
 async function ensureWorktree(root, repo, slug, baseSlug, track, say) {
   const dir = path.join(root, WT_DIR, slug), branch = `squad/${slug}`, notes = [];
   if (fs.existsSync(path.join(dir, '.git'))) return { dir, branch, notes, created: false };
@@ -347,7 +365,7 @@ async function ensureWorktree(root, repo, slug, baseSlug, track, say) {
     else {
       say('fetch', 'Atualizando a branch base (git fetch).');
       let fetched = true;
-      try { await gitRun(['fetch', '-q', 'origin'], root, 300000, track); } catch (e) { fetched = false; notes.push(`git fetch falhou, a feature parte da cópia local: ${e.message}`); }
+      try { await gitRun(['fetch', '-q', 'origin'], root, 300000, track); await syncLocalBase(root, repo); } catch (e) { fetched = false; notes.push(`git fetch falhou, a feature parte da cópia local: ${e.message}`); }
       // A base branch deleted on the origin stays in the clone (fetch does not prune): never start a feature from that old copy.
       if (fetched && repo.baseBranch && !await gitRun(['ls-remote', '--heads', 'origin', `refs/heads/${repo.baseBranch}`], root, 30000, track).catch(() => 'unknown'))
         throw Object.assign(new Error(`A branch base ${repo.baseBranch} não existe mais no origin de ${repo.id}. Troque a branch base (aviso da operação ou Configurações > Repositórios) antes de iniciar features novas.`), { base: true });
@@ -429,7 +447,7 @@ async function mapStatus(cwd, target, sub = '') {
 function mapPromptNote(m) {
   if (!['changed', 'stale', 'unknown'].includes(m?.status)) return '';
   if (m.status === 'unknown') return '\n\n## Mapa do repositório sem referência\nNão foi possível achar o commit descrito em docs/squad/.reconhecimento na branch base. Confira a estrutura dos trechos do mapa que você usar antes de confiar neles.';
-  return `\n\n## Mudanças no repositório desde o mapa (docs/squad)\nO mapa descreve o commit ${m.ref}${m.date ? ` (${m.date})` : ''}${m.fallback ? ', achado pela data porque o commit registrado saiu do histórico' : ''}. Desde então, ${m.total} arquivo${m.total > 1 ? 's mudaram' : ' mudou'} fora de docs/squad (A = novo, M = alterado, D = removido):\n${m.files.join('\n')}${m.total > m.files.length ? `\n(e mais ${m.total - m.files.length})` : ''}\nLeia desses arquivos só os que importam para a sua tarefa; o resto do mapa continua valendo.${m.status === 'stale' ? `\nO mapa está desatualizado${m.structural.length ? ` (mudanças estruturais: ${m.structural.slice(0, 8).join(', ')})` : ''}: confira a estrutura dos trechos que você usar e registre no relatório o que o mapa precisa corrigir.` : ''}`;
+  return `\n\n## Mudanças no repositório desde o mapa (docs/squad)\nO mapa descreve o commit ${m.ref}${m.date ? ` (${m.date})` : ''}${m.fallback ? ', achado pela data porque o commit registrado saiu do histórico' : ''}. Desde então, ${m.total} arquivo${m.total > 1 ? 's mudaram' : ' mudou'} fora de docs/squad (A = novo, M = alterado, D = removido):\n${m.files.join('\n')}${m.total > m.files.length ? `\n(e mais ${m.total - m.files.length}; a lista completa sai de \`git diff --name-status ${m.ref} ${m.target}\`)` : ''}\nNo git, a branch base é ${m.target}.\nLeia desses arquivos só os que importam para a sua tarefa; o resto do mapa continua valendo.${m.status === 'stale' ? `\nO mapa está desatualizado${m.structural.length ? ` (mudanças estruturais: ${m.structural.slice(0, 8).join(', ')})` : ''}: confira a estrutura dos trechos que você usar e registre no relatório o que o mapa precisa corrigir.` : ''}`;
 }
 
 /** The commander's plan of a linked operation gets docs/squad/mapa.md from the base branch (or the clone, before the merge). */
@@ -1404,7 +1422,7 @@ async function handle(req, res) {
       const root = projectDir(parts[2]);
       if (!fs.existsSync(path.join(root, '.git'))) return json(res, 200, { ok: true, status: 'no-clone' });
       const dir = longPath(root);
-      const fetched = url.searchParams.get('fetch') === '1' ? await gitRun(['fetch', '-q', 'origin'], dir, 300000).then(() => true, e => e.message) : null;
+      const fetched = url.searchParams.get('fetch') === '1' ? await gitRun(['fetch', '-q', 'origin'], dir, 300000).then(() => syncLocalBase(dir, repo).then(() => true), e => e.message) : null;
       // branches=squad/a,squad/b: whether each approved feature branch reached the base branch.
       const branches = (url.searchParams.get('branches') || '').split(',').filter(Boolean).slice(0, 60);
       if (branches.some(b => !BRANCH_NAME_RE.test(b))) return fail(res, 400, 'Branch inválida.');

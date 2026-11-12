@@ -768,7 +768,14 @@ test('map freshness comes from git: fresh, changed (list in the prompt), stale o
     const changed = await step('f02-bbbbbb');
     assert.equal(changed.map.status, 'changed');
     assert.deepEqual(changed.map.files, ['M src/a.js']);
-    assert.match(changed.prompt, /## Mudanças no repositório desde o mapa[\s\S]*M src\/a\.js/);
+    assert.match(changed.prompt, /## Mudanças no repositório desde o mapa[\s\S]*M src\/a\.js[\s\S]*No git, a branch base é origin\/main\./);
+    // The fetch also moves the clone's local base branch (checked out there, where the chats run) to origin/main.
+    const clone = path.join(projectsRoot, folder), head = r => execFileSync('git', ['-C', clone, 'rev-parse', r], { encoding: 'utf8' }).trim();
+    assert.equal(head('refs/heads/main'), git('rev-parse', 'HEAD'));
+    commit('src/b.js', 'b\n', 'outra');
+    assert.equal((await check()).fetched, true);
+    assert.equal(head('refs/heads/main'), git('rev-parse', 'HEAD'));
+    assert.equal(execFileSync('git', ['-C', clone, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim(), '');
     // A manifest and a new top-level folder are structural: stale.
     commit('package.json', '{}\n', 'manifesto'); commit('infra/main.tf', '\n', 'infra');
     const stale = await check();
